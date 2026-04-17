@@ -56,9 +56,10 @@ program
 program
   .command("auto [name]")
   .description("Auto-launch an autonomous CC session (--dangerously-skip-permissions)")
-  .action(async (name?: string) => {
+  .option("--prompt <text>", "Initial prompt to send to CC after startup")
+  .action(async (name: string | undefined, opts: { prompt?: string }) => {
     await initConfig();
-    await autoCommand(name);
+    await autoCommand(name, opts);
   });
 
 program

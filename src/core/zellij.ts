@@ -25,24 +25,48 @@ export async function openSession(
   } else if (mux === "tmux") {
     await openTmuxWindow(tabName, fullCmd);
   } else {
-    // Not inside a mux — print instructions
     console.log(
       `\nNot inside a Zellij/tmux session. Run manually:\n\n  cd "${cwd}" && ${command}\n`
     );
   }
 }
 
+/**
+ * Send a prompt string to an already-open ccmux tab.
+ * Waits for CC to finish startup before typing.
+ */
+export async function sendToTab(name: string, prompt: string, delayMs = 3000): Promise<void> {
+  const mux = detectMultiplexer();
+  const tabName = `ccmux:${name}`;
+
+  if (mux === "zellij") {
+    // Switch to the tab first
+    try {
+      await execa(ZELLIJ_BIN, ["action", "go-to-tab-name", tabName], { stdio: "pipe" });
+    } catch {
+      // Tab might still be starting — continue anyway
+    }
+    // Wait for CC to print its prompt
+    await new Promise((r) => setTimeout(r, delayMs));
+    // Write the prompt
+    await execa(ZELLIJ_BIN, ["action", "write-chars", prompt + "\n"], { stdio: "pipe" });
+    // Switch back to previous tab so Cursor user isn't jarred
+    await execa(ZELLIJ_BIN, ["action", "go-to-previous-tab"], { stdio: "pipe" }).catch(() => {});
+  } else if (mux === "tmux") {
+    await new Promise((r) => setTimeout(r, delayMs));
+    await execa(
+      TMUX_BIN,
+      ["send-keys", "-t", tabName, prompt, "Enter"],
+      { stdio: "pipe" }
+    );
+  }
+  // If no mux: prompt was already echoed by openSession — nothing more to do
+}
+
 async function openZellijTab(name: string, command: string): Promise<void> {
-  // Create a new tab
   await execa(ZELLIJ_BIN, ["action", "new-tab", "--name", name], { stdio: "pipe" });
-
-  // Wait briefly for tab to be ready
   await new Promise((r) => setTimeout(r, 300));
-
-  // Send the command
-  await execa(ZELLIJ_BIN, ["action", "write-chars", command + "\n"], {
-    stdio: "pipe",
-  });
+  await execa(ZELLIJ_BIN, ["action", "write-chars", command + "\n"], { stdio: "pipe" });
 }
 
 async function openTmuxWindow(name: string, command: string): Promise<void> {
@@ -54,8 +78,6 @@ export async function closeTab(name: string): Promise<void> {
   const tabName = `ccmux:${name}`;
 
   if (mux === "zellij") {
-    // Zellij doesn't have a direct "close tab by name" — send exit to the pane
-    // This is a best-effort: switch to tab then close it
     try {
       await execa(ZELLIJ_BIN, ["action", "go-to-tab-name", tabName], { stdio: "pipe" });
       await new Promise((r) => setTimeout(r, 200));

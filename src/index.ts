@@ -4,6 +4,7 @@ import { newCommand } from "./commands/new.js";
 import { listCommand } from "./commands/list.js";
 import { closeCommand } from "./commands/close.js";
 import { swapCommand } from "./commands/swap.js";
+import { autoCommand } from "./commands/auto.js";
 import { initConfig } from "./config/schema.js";
 
 const program = new Command();
@@ -50,6 +51,14 @@ program
   .action(async (project: string) => {
     await initConfig();
     await swapCommand(project);
+  });
+
+program
+  .command("auto [name]")
+  .description("Auto-launch an autonomous CC session (--dangerously-skip-permissions)")
+  .action(async (name?: string) => {
+    await initConfig();
+    await autoCommand(name);
   });
 
 program

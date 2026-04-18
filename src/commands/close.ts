@@ -5,6 +5,7 @@ import { deleteWorktree, getWorktreeDiff } from "../core/worktree.js";
 import { closeTab } from "../core/zellij.js";
 import { releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
+import { writeObsidianHandoff } from "../integrations/obsidian.js";
 
 export interface CloseOptions {
   force?: boolean;
@@ -47,7 +48,7 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
     // 4. Write handoff
     if (!opts.noHandoff && cfg.obsidian.enabled) {
       spinner.text = "Writing Obsidian handoff...";
-      await writeHandoff(session.name, session.branch, diff, cfg.obsidian.handoffPath);
+      await writeHandoff(session.name, session.branch, diff, cfg);
     } else if (!opts.noHandoff) {
       // Write to local file as fallback
       await writeLocalHandoff(session.name, session.branch, diff);
@@ -101,9 +102,22 @@ async function writeHandoff(
   name: string,
   branch: string,
   diff: string,
-  obsidianPath: string
+  cfg: Awaited<ReturnType<typeof loadConfig>>
 ): Promise<void> {
-  // Obsidian MCP integration — requires MCP to be available
-  // For now, fall back to local file. Phase 1 will wire up MCP.
-  await writeLocalHandoff(name, branch, diff);
+  const ok = await writeObsidianHandoff(
+    {
+      sessionName: name,
+      branch,
+      diff,
+      costUSD: 0,
+      currency: cfg.cost.currency,
+      exchangeRate: cfg.cost.exchangeRate,
+    },
+    cfg.obsidian
+  );
+  if (ok) {
+    console.log(chalk.dim(`  handoff → Obsidian: ${cfg.obsidian.handoffPath}`));
+  } else {
+    await writeLocalHandoff(name, branch, diff);
+  }
 }

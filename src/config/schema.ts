@@ -24,6 +24,8 @@ export interface CcmuxConfig {
   };
   obsidian: {
     enabled: boolean;
+    baseUrl: string;
+    apiKey: string;
     handoffPath: string;
   };
   autoclaw: {
@@ -43,7 +45,12 @@ const DEFAULTS: CcmuxConfig = {
   defaultProject: "think-you-lab",
   projects: {},
   n8n: { enabled: false, webhookUrl: "http://127.0.0.1:5679/webhook/ccmux", servePort: 9090 },
-  obsidian: { enabled: false, handoffPath: "05_PROJECTS/ccmux-sessions" },
+  obsidian: {
+    enabled: true,
+    baseUrl: "http://127.0.0.1:27123",
+    apiKey: "",
+    handoffPath: "05_PROJECTS/ccmux-sessions",
+  },
   autoclaw: { url: "http://autoclaw:3101/task" },
   cost: { enabled: true, currency: "JPY", exchangeRate: 155 },
 };

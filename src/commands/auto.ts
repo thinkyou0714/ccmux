@@ -8,6 +8,7 @@ import { openSession, sendToTab, getMuxInfo } from "../core/zellij.js";
 import { createSession, updateSession } from "../core/session.js";
 import { acquireLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
+import { resolveClaudeCmd } from "../integrations/autoclaw.js";
 
 const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
 
@@ -50,10 +51,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
       llmBackend: project.defaultLlm,
     });
 
-    const baseClaudeCmd =
-      project.defaultLlm === "autoclaw"
-        ? `ANTHROPIC_BASE_URL="${cfg.autoclaw.url}" claude`
-        : "claude";
+    const baseClaudeCmd = await resolveClaudeCmd(project.defaultLlm);
 
     if (muxType !== "none") {
       // Inside Zellij or tmux — open tab, then send prompt

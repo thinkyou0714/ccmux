@@ -5,6 +5,7 @@ import { listCommand } from "./commands/list.js";
 import { closeCommand } from "./commands/close.js";
 import { swapCommand } from "./commands/swap.js";
 import { autoCommand } from "./commands/auto.js";
+import { serveCommand } from "./commands/serve.js";
 import { initConfig } from "./config/schema.js";
 
 const program = new Command();
@@ -65,6 +66,15 @@ program
       opts.prompt = (await fs.readFile(opts.promptFile, "utf-8")).trim();
     }
     await autoCommand(name, opts);
+  });
+
+program
+  .command("serve")
+  .description("Start HTTP webhook server for n8n integration (default port: 9090)")
+  .option("-p, --port <number>", "Override listen port", parseInt)
+  .action(async (opts: { port?: number }) => {
+    await initConfig();
+    await serveCommand(opts);
   });
 
 program

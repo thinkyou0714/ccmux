@@ -5,6 +5,7 @@ import { openSession } from "../core/zellij.js";
 import { createSession } from "../core/session.js";
 import { acquireLock, releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
+import { resolveClaudeCmd } from "../integrations/autoclaw.js";
 
 export interface NewOptions {
   project?: string;
@@ -32,10 +33,7 @@ export async function newCommand(name: string, opts: NewOptions): Promise<void> 
     const wt = await createWorktree(name, project.path);
 
     // 2. Determine the claude command
-    const claudeCmd =
-      llm === "autoclaw"
-        ? `ANTHROPIC_BASE_URL="${cfg.autoclaw.url}" claude`
-        : "claude";
+    const claudeCmd = await resolveClaudeCmd(llm);
 
     // 3. Create session record
     const session = await createSession({

@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { listSessions, pruneOrphanedSessions, type Session } from "../core/session.js";
 import { loadConfig } from "../config/schema.js";
-import { execa } from "execa";
+import { getTodayCost, formatCost } from "../core/cost.js";
 
 export interface ListOptions {
   all?: boolean;
@@ -35,17 +35,6 @@ async function getCost(session: Session, exchangeRate: number, currency: string)
   return `${sym}${amount.toFixed(currency === "JPY" ? 0 : 3)}`;
 }
 
-async function fetchCcusageCost(sessionId: string): Promise<number> {
-  try {
-    const { stdout } = await execa("npx", ["ccusage", "--json"], { stdio: "pipe" });
-    const data = JSON.parse(stdout) as { sessionId?: string; totalCost?: number }[];
-    const entry = data.find((d) => d.sessionId === sessionId);
-    return entry?.totalCost ?? 0;
-  } catch {
-    return 0;
-  }
-}
-
 export async function listCommand(opts: ListOptions): Promise<void> {
   const pruned = await pruneOrphanedSessions();
   if (pruned > 0) {
@@ -54,9 +43,14 @@ export async function listCommand(opts: ListOptions): Promise<void> {
 
   const cfg = await loadConfig();
   const sessions = await listSessions();
+  const todayCost = await getTodayCost();
 
   if (sessions.length === 0) {
-    console.log(chalk.dim("\n  No active sessions. Run `ccmux new <name>` to start.\n"));
+    const todayDisplay = todayCost
+      ? formatCost(todayCost.costUSD, cfg.cost.currency, cfg.cost.exchangeRate)
+      : "N/A";
+    console.log(chalk.dim(`\n  No active sessions. Run \`ccmux new <name>\` to start.`));
+    console.log(chalk.dim(`  today: ${todayDisplay}\n`));
     return;
   }
 
@@ -87,12 +81,14 @@ export async function listCommand(opts: ListOptions): Promise<void> {
     console.log(row);
   }
 
-  const sym = cfg.cost.currency === "JPY" ? "¥" : "$";
-  const totalDisplay =
-    cfg.cost.currency === "JPY"
-      ? `${sym}${Math.round(totalUSD * cfg.cost.exchangeRate)}`
-      : `${sym}${totalUSD.toFixed(3)}`;
+  const todayDisplay = todayCost
+    ? formatCost(todayCost.costUSD, cfg.cost.currency, cfg.cost.exchangeRate)
+    : chalk.dim("N/A");
 
   console.log(chalk.dim("─".repeat(80)));
-  console.log(chalk.dim(`  ${sessions.length} session(s)  |  total cost today: ${totalDisplay}\n`));
+  console.log(
+    chalk.dim(`  ${sessions.length} session(s)  |  today: ${todayDisplay}`) +
+    (todayCost ? chalk.dim(`  (${todayCost.models.join(", ")})`) : "") +
+    "\n"
+  );
 }

@@ -57,8 +57,13 @@ program
   .command("auto [name]")
   .description("Auto-launch an autonomous CC session (--dangerously-skip-permissions)")
   .option("--prompt <text>", "Initial prompt to send to CC after startup")
-  .action(async (name: string | undefined, opts: { prompt?: string }) => {
+  .option("--prompt-file <path>", "Read initial prompt from a file (avoids shell injection)")
+  .action(async (name: string | undefined, opts: { prompt?: string; promptFile?: string }) => {
     await initConfig();
+    if (opts.promptFile && !opts.prompt) {
+      const { default: fs } = await import("fs/promises");
+      opts.prompt = (await fs.readFile(opts.promptFile, "utf-8")).trim();
+    }
     await autoCommand(name, opts);
   });
 

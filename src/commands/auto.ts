@@ -9,7 +9,8 @@ import { openSession, sendToTab, getMuxInfo } from "../core/zellij.js";
 import { createSession, updateSession } from "../core/session.js";
 import { acquireLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
-import { resolveClaudeCmd } from "../integrations/autoclaw.js";
+import { resolveClaudeCmd, buildClaudeEnv } from "../integrations/autoclaw.js";
+import { writeTaskState, taskStateClaudioPreamble } from "../core/taskstate.js";
 
 const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
 
@@ -21,6 +22,9 @@ function autoName(): string {
 export interface AutoOptions {
   prompt?: string;
   resume?: string;
+  loop?: boolean;
+  maxIter?: number;
+  until?: string;
 }
 
 export async function autoCommand(name?: string, opts: AutoOptions = {}): Promise<void> {
@@ -67,6 +71,20 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
       llmBackend: project.defaultLlm,
     });
 
+    // Write TASK_STATE.md for autonomous sessions that have a prompt
+    if (opts.prompt) {
+      await writeTaskState(wt.path, {
+        sessionName,
+        goal: opts.prompt.slice(0, 500), // cap goal length in state file
+        iteration: 0,
+        maxIterations: opts.maxIter ?? (opts.loop ? 50 : 1),
+        status: "running",
+        completedSteps: [],
+        nextSteps: [],
+        lastUpdated: new Date().toISOString(),
+      });
+    }
+
     const baseClaudeCmd = await resolveClaudeCmd(project.defaultLlm);
 
     if (muxType !== "none") {
@@ -77,9 +95,13 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
       await updateSession(session.id, { status: "starting" });
 
       if (opts.prompt) {
+        // Prepend TASK_STATE preamble for loop-mode sessions
+        const fullPrompt = opts.loop
+          ? taskStateClaudioPreamble(sessionName) + opts.prompt
+          : opts.prompt;
+
         spinner.text = "Waiting for CC to start, then sending prompt...";
-        // sendToTab waits internally (default 3s) before typing
-        await sendToTab(sessionName, opts.prompt);
+        await sendToTab(sessionName, fullPrompt);
         await updateSession(session.id, { status: "busy" });
         spinner.succeed(chalk.green(`"${sessionName}" launched → prompt sent to Zellij tab`));
       } else {
@@ -88,35 +110,48 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
       }
     } else {
       // Outside Zellij — daemon mode
-      // If we have a prompt: run claude -p non-interactively and log output
-      // If no prompt: write a startup script the user can attach to
       if (opts.prompt) {
-        spinner.text = "Spawning daemon (claude -p)...";
         const logDir = path.join(CCMUX_DIR, "logs");
         await fs.mkdir(logDir, { recursive: true });
         const logFile = path.join(logDir, `${sessionName}.log`);
 
-        const env: Record<string, string> = {
-          ...(process.env as Record<string, string>),
-          CCMUX_SESSION: sessionName,
-        };
-        if (project.defaultLlm === "autoclaw") {
-          env["ANTHROPIC_BASE_URL"] = cfg.autoclaw.url;
+        const env = buildClaudeEnv(project.defaultLlm, cfg, sessionName);
+
+        if (opts.loop) {
+          // Ralph Loop: iterate until completion promise found or max iterations reached
+          await spawnLoopDaemon({
+            sessionName,
+            prompt: opts.prompt,
+            worktreePath: wt.path,
+            logFile,
+            env,
+            maxIter: opts.maxIter ?? 50,
+            until: opts.until ?? "CCMUX_COMPLETE",
+          });
+          spinner.text = "Loop daemon spawned";
+        } else {
+          // Single-shot daemon
+          const promptFile = path.join(wt.path, "TASK_PROMPT.md");
+          await fs.writeFile(promptFile, opts.prompt, "utf-8");
+
+          const logHandle = await fs.open(logFile, "a");
+          const child = spawn(
+            "claude",
+            ["--dangerously-skip-permissions", "-p", `@${promptFile}`],
+            { cwd: wt.path, detached: true, stdio: ["ignore", logHandle.fd, logHandle.fd], env }
+          );
+          child.unref();
+          await logHandle.close();
+          await updateSession(session.id, { status: "busy", pid: child.pid });
         }
 
-        const logHandle = await fs.open(logFile, "a");
-        const child = spawn(
-          "claude",
-          ["--dangerously-skip-permissions", "-p", opts.prompt],
-          { cwd: wt.path, detached: true, stdio: ["ignore", logHandle.fd, logHandle.fd], env }
-        );
-        child.unref();
-        await logHandle.close();
-
-        await updateSession(session.id, { status: "busy", pid: child.pid });
-        spinner.succeed(chalk.green(`"${sessionName}" running as daemon`));
+        spinner.succeed(chalk.green(`"${sessionName}" running as daemon${opts.loop ? " (loop)" : ""}`));
         console.log(chalk.dim(`  log: ${logFile}`));
         console.log(chalk.dim(`  tail -f ${logFile}   to monitor`));
+        if (opts.loop) {
+          console.log(chalk.dim(`  completion signal: "${opts.until ?? "CCMUX_COMPLETE"}"`));
+          console.log(chalk.dim(`  max iterations: ${opts.maxIter ?? 50}`));
+        }
       } else {
         await updateSession(session.id, { status: "idle" });
         spinner.succeed(chalk.green(`"${sessionName}" worktree ready`));
@@ -132,7 +167,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
         `  ${chalk.dim("id")}      ${session.id.slice(0, 8)}`,
         `  ${chalk.dim("branch")}  ${wt.branch}`,
         `  ${chalk.dim("path")}    ${wt.path}`,
-        `  ${chalk.dim("mode")}    autonomous`,
+        `  ${chalk.dim("mode")}    ${opts.loop ? "autonomous loop" : "autonomous"}`,
         "",
         chalk.dim(`  ccmux list   →  monitor all sessions`),
         chalk.dim(`  ccmux close ${sessionName}  →  finish and write handoff`),
@@ -143,4 +178,56 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
     spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
     process.exit(1);
   }
+}
+
+interface LoopDaemonOpts {
+  sessionName: string;
+  prompt: string;
+  worktreePath: string;
+  logFile: string;
+  env: Record<string, string>;
+  maxIter: number;
+  until: string;
+}
+
+async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
+  const { worktreePath, logFile, env, maxIter, until, prompt, sessionName } = opts;
+
+  // Write prompt and loop script to worktree (no shell-injected values)
+  const promptFile = path.join(worktreePath, "TASK_PROMPT.md");
+  const preamble = taskStateClaudioPreamble(sessionName);
+  await fs.writeFile(promptFile, preamble + prompt, "utf-8");
+
+  const loopScript = path.join(worktreePath, ".ccmux-loop.sh");
+  const scriptContent = [
+    `#!/usr/bin/env bash`,
+    `set -euo pipefail`,
+    `MAX_ITER="${maxIter}"`,
+    `UNTIL_PATTERN="${until.replace(/"/g, '\\"')}"`,
+    `LOGFILE="${logFile.replace(/"/g, '\\"')}"`,
+    `PROMPT_FILE="${promptFile.replace(/"/g, '\\"')}"`,
+    `ITER=0`,
+    `while [ "$ITER" -lt "$MAX_ITER" ]; do`,
+    `  ITER=$((ITER + 1))`,
+    `  echo "=== ccmux loop iteration $ITER / $MAX_ITER ===" >> "$LOGFILE"`,
+    `  claude --dangerously-skip-permissions -p "@$PROMPT_FILE" >> "$LOGFILE" 2>&1 || true`,
+    `  if grep -qF "$UNTIL_PATTERN" "$LOGFILE"; then`,
+    `    echo "=== CCMUX_LOOP_COMPLETE ===" >> "$LOGFILE"`,
+    `    exit 0`,
+    `  fi`,
+    `done`,
+    `echo "=== CCMUX_LOOP_MAX_ITER_REACHED ===" >> "$LOGFILE"`,
+  ].join("\n") + "\n";
+
+  await fs.writeFile(loopScript, scriptContent, { mode: 0o755 });
+
+  const logHandle = await fs.open(logFile, "a");
+  const child = spawn("bash", [loopScript], {
+    cwd: worktreePath,
+    detached: true,
+    stdio: ["ignore", logHandle.fd, logHandle.fd],
+    env,
+  });
+  child.unref();
+  await logHandle.close();
 }

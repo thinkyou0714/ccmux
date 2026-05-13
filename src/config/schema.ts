@@ -33,6 +33,10 @@ export interface CcmuxConfig {
   };
   autoclaw: {
     url: string;
+    /** Model name to pass via --model flag (e.g. "qwen3-coder" for Ollama). Omit to use server default. */
+    model?: string;
+    /** Auth token for the local proxy. Use "ollama" when pointing directly at Ollama. */
+    authToken?: string;
   };
   cost: {
     enabled: boolean;
@@ -59,7 +63,7 @@ const DEFAULTS: CcmuxConfig = {
     apiKey: "",
     handoffPath: "05_PROJECTS/ccmux-sessions",
   },
-  autoclaw: { url: "http://autoclaw:3101/task" },
+  autoclaw: { url: "http://autoclaw:3101/task", model: undefined, authToken: undefined },
   cost: { enabled: true, currency: "JPY", exchangeRate: 155 },
   logs: { maxAgeDays: 30, maxSizeMB: 100 },
 };

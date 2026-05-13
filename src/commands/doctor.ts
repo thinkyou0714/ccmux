@@ -114,6 +114,48 @@ async function checkAutoclaw(): Promise<CheckResult> {
   };
 }
 
+async function checkOllama(): Promise<CheckResult | null> {
+  const cfg = await loadConfig();
+  // Only check Ollama if autoclaw URL points to localhost:11434 (Ollama default)
+  const isOllamaUrl =
+    cfg.autoclaw.url.includes("localhost:11434") ||
+    cfg.autoclaw.url.includes("127.0.0.1:11434");
+
+  try {
+    await execa("ollama", ["--version"], { stdio: "pipe" });
+    const installed = true;
+
+    if (isOllamaUrl) {
+      // Also check if the configured model is pulled
+      const model = cfg.autoclaw.model;
+      if (model) {
+        try {
+          const { stdout } = await execa("ollama", ["list"], { stdio: "pipe" });
+          const pulled = stdout.includes(model);
+          return {
+            label: `Ollama (model: ${model})`,
+            ok: pulled,
+            detail: pulled ? undefined : `model not pulled — run: ollama pull ${model}`,
+          };
+        } catch {
+          return { label: "Ollama", ok: installed, detail: "installed but could not list models" };
+        }
+      }
+      return { label: "Ollama", ok: true, detail: "installed (no model configured)" };
+    }
+    return null; // Ollama installed but autoclaw URL is not Ollama — don't show
+  } catch {
+    if (isOllamaUrl) {
+      return {
+        label: "Ollama",
+        ok: false,
+        detail: "not installed — run: curl -fsSL https://ollama.com/install.sh | sh",
+      };
+    }
+    return null; // Not installed and not configured to use Ollama — skip
+  }
+}
+
 export async function doctorCommand(): Promise<void> {
   const [node, claude, zellij, tmux, ccusage, config] = await Promise.all([
     checkNodeVersion(),
@@ -124,10 +166,14 @@ export async function doctorCommand(): Promise<void> {
     checkConfig(),
   ]);
 
-  const obsidian = await checkObsidian();
-  const autoclaw = await checkAutoclaw();
+  const [obsidian, autoclaw, ollama] = await Promise.all([
+    checkObsidian(),
+    checkAutoclaw(),
+    checkOllama(),
+  ]);
 
   const results: CheckResult[] = [node, claude, zellij, tmux, ccusage, config, autoclaw];
+  if (ollama) results.push(ollama);
   if (obsidian) results.push(obsidian);
 
   console.log("\nccmux doctor\n");

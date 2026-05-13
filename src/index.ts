@@ -10,6 +10,7 @@ import { doctorCommand } from "./commands/doctor.js";
 import { pruneCommand } from "./commands/prune.js";
 import { logsCommand } from "./commands/logs.js";
 import { mergeCommand } from "./commands/merge.js";
+import { reflectCommand } from "./commands/reflect.js";
 import { initConfig } from "./config/schema.js";
 
 const program = new Command();
@@ -65,7 +66,10 @@ program
   .option("--prompt <text>", "Initial prompt to send to CC after startup")
   .option("--prompt-file <path>", "Read initial prompt from a file (avoids shell injection)")
   .option("--resume <name>", "Resume from the latest handoff of a closed session")
-  .action(async (name: string | undefined, opts: { prompt?: string; promptFile?: string; resume?: string }) => {
+  .option("--loop", "Run in Ralph Loop mode: iterate until completion signal or max iterations")
+  .option("--max-iter <n>", "Max iterations for --loop mode (default: 50)", parseInt)
+  .option("--until <pattern>", "Completion signal pattern for --loop (default: CCMUX_COMPLETE)")
+  .action(async (name: string | undefined, opts: { prompt?: string; promptFile?: string; resume?: string; loop?: boolean; maxIter?: number; until?: string }) => {
     await initConfig();
     if (opts.promptFile && !opts.prompt) {
       const { default: fs } = await import("fs/promises");
@@ -127,6 +131,17 @@ program
   .action(async (name: string, opts: { squash?: boolean; noFf?: boolean; target?: string; keep?: boolean; pr?: boolean; draft?: boolean; reviewer?: string }) => {
     await initConfig();
     await mergeCommand(name, opts);
+  });
+
+program
+  .command("reflect <name>")
+  .description("Analyze a session log and generate CLAUDE.md improvement rules (Reflexion pattern)")
+  .option("--apply", "Append generated rules to the project CLAUDE.md (review with git diff after)")
+  .option("--backend <backend>", "LLM backend to use for reflection: claude | autoclaw", "claude")
+  .option("--output-file <path>", "Write reflection output to a file instead of stdout")
+  .action(async (name: string, opts: { apply?: boolean; backend?: "claude" | "autoclaw"; outputFile?: string }) => {
+    await initConfig();
+    await reflectCommand(name, opts);
   });
 
 program

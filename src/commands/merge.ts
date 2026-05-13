@@ -66,8 +66,10 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("CONFLICT") || msg.includes("conflict")) {
-        spinner.warn(chalk.yellow(`Merge conflict detected. Resolve conflicts manually.`));
-        console.log(chalk.dim(`  Worktree preserved at: ${session.worktreePath}`));
+        await execa("git", ["-C", session.projectPath, "merge", "--abort"], { stdio: "pipe" }).catch(() => {});
+        spinner.warn(chalk.yellow(`Merge conflict detected — merge aborted.`));
+        console.log(chalk.dim(`  Resolve manually in: ${session.worktreePath}`));
+        console.log(chalk.dim(`  Then re-run: ccmux merge ${name} --target ${targetBranch}`));
         process.exit(1);
       }
       throw err;
@@ -99,6 +101,15 @@ async function createPullRequest(
     await execa("gh", ["--version"], { stdio: "pipe" });
   } catch {
     console.log(chalk.yellow("  gh CLI not found — skipping PR creation"));
+    return;
+  }
+
+  // Push the session branch so GitHub has a remote head to open the PR from
+  try {
+    await execa("git", ["-C", projectPath, "push", "-u", "origin", branch], { stdio: "pipe" });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(chalk.yellow(`  Failed to push ${branch}: ${msg} — skipping PR creation`));
     return;
   }
 

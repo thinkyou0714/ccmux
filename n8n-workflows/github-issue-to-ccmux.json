@@ -38,7 +38,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const issue = $input.first().json.body.issue;\nconst sessionName = `issue-${issue.number}`;\nconst prompt = `Issue #${issue.number}: ${issue.title}\\n\\n${issue.body || ''}`;\nreturn [{ json: { sessionName, prompt, issueNumber: issue.number, issueTitle: issue.title } }];"
+        "jsCode": "const issue = $input.first().json.body.issue;\nconst sessionName = `issue-${issue.number}`;\nreturn [{ json: { sessionName, issueNumber: issue.number, issueTitle: issue.title, issueBody: issue.body || '' } }];"
       },
       "id": "set-session-params",
       "name": "Build Session Params",
@@ -59,7 +59,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ action: 'opened', issue: { number: $json.issueNumber, title: $json.issueTitle, body: $json.prompt } }) }}",
+        "jsonBody": "={{ JSON.stringify({ action: 'opened', issue: { number: $json.issueNumber, title: $json.issueTitle, body: $json.issueBody } }) }}",
         "options": {}
       },
       "id": "post-ccmux",

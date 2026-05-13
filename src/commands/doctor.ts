@@ -114,6 +114,33 @@ async function checkAutoclaw(): Promise<CheckResult> {
   };
 }
 
+async function checkBubblewrap(): Promise<CheckResult | null> {
+  // Only show bubblewrap check on Linux
+  if (process.platform !== "linux") return null;
+
+  try {
+    const { stdout } = await execa("bwrap", ["--version"], { stdio: "pipe" });
+    return { label: `bubblewrap sandbox (${stdout.trim()})`, ok: true };
+  } catch {
+    return {
+      label: "bubblewrap sandbox",
+      ok: false,
+      detail: "optional but recommended for --sandbox mode — install: apt install bubblewrap",
+    };
+  }
+}
+
+async function checkAutoMemoryCost(): Promise<CheckResult> {
+  const disabled = process.env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] === "1";
+  return {
+    label: `Auto-memory (background Opus extraction)`,
+    ok: true,
+    detail: disabled
+      ? "disabled (CLAUDE_CODE_DISABLE_AUTO_MEMORY=1) — token cost is normal"
+      : "enabled — doubles effective token consumption per turn; set CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 to disable",
+  };
+}
+
 async function checkOllama(): Promise<CheckResult | null> {
   const cfg = await loadConfig();
   // Only check Ollama if autoclaw URL points to localhost:11434 (Ollama default)
@@ -166,14 +193,18 @@ export async function doctorCommand(): Promise<void> {
     checkConfig(),
   ]);
 
-  const [obsidian, autoclaw, ollama] = await Promise.all([
+  const [obsidian, autoclaw, ollama, bwrap, autoMem] = await Promise.all([
     checkObsidian(),
     checkAutoclaw(),
     checkOllama(),
+    checkBubblewrap(),
+    checkAutoMemoryCost(),
   ]);
 
   const results: CheckResult[] = [node, claude, zellij, tmux, ccusage, config, autoclaw];
   if (ollama) results.push(ollama);
+  if (bwrap) results.push(bwrap);
+  results.push(autoMem);
   if (obsidian) results.push(obsidian);
 
   console.log("\nccmux doctor\n");

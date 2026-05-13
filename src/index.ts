@@ -69,7 +69,8 @@ program
   .option("--loop", "Run in Ralph Loop mode: iterate until completion signal or max iterations")
   .option("--max-iter <n>", "Max iterations for --loop mode (default: 50)", parseInt)
   .option("--until <pattern>", "Completion signal pattern for --loop (default: CCMUX_COMPLETE)")
-  .action(async (name: string | undefined, opts: { prompt?: string; promptFile?: string; resume?: string; loop?: boolean; maxIter?: number; until?: string }) => {
+  .option("--sandbox", "Wrap session in bubblewrap OS sandbox (Linux only; requires bwrap)")
+  .action(async (name: string | undefined, opts: { prompt?: string; promptFile?: string; resume?: string; loop?: boolean; maxIter?: number; until?: string; sandbox?: boolean }) => {
     await initConfig();
     if (opts.promptFile && !opts.prompt) {
       const { default: fs } = await import("fs/promises");

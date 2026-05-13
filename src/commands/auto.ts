@@ -11,6 +11,7 @@ import { acquireLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { resolveClaudeCmd, buildClaudeEnv } from "../integrations/autoclaw.js";
 import { writeTaskState, taskStateClaudioPreamble } from "../core/taskstate.js";
+import { installSessionHooks } from "../core/hooks.js";
 
 const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
 
@@ -25,6 +26,7 @@ export interface AutoOptions {
   loop?: boolean;
   maxIter?: number;
   until?: string;
+  sandbox?: boolean;
 }
 
 export async function autoCommand(name?: string, opts: AutoOptions = {}): Promise<void> {
@@ -83,7 +85,13 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
         nextSteps: [],
         lastUpdated: new Date().toISOString(),
       });
+
+      // Install Stop + SessionStart + PreToolUse hooks for autonomous sessions
+      await installSessionHooks(wt.path, sessionName, opts.maxIter ?? (opts.loop ? 50 : 1));
     }
+
+    // Create .claude/tools/ directory for agent self-synthesized tools
+    await fs.mkdir(path.join(wt.path, ".claude", "tools"), { recursive: true });
 
     const baseClaudeCmd = await resolveClaudeCmd(project.defaultLlm);
 
@@ -127,6 +135,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
             env,
             maxIter: opts.maxIter ?? 50,
             until: opts.until ?? "CCMUX_COMPLETE",
+            sandbox: opts.sandbox,
           });
           spinner.text = "Loop daemon spawned";
         } else {
@@ -134,12 +143,19 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
           const promptFile = path.join(wt.path, "TASK_PROMPT.md");
           await fs.writeFile(promptFile, opts.prompt, "utf-8");
 
-          const logHandle = await fs.open(logFile, "a");
-          const child = spawn(
-            "claude",
+          const { bin, args: launchArgs } = buildLaunchArgs(
             ["--dangerously-skip-permissions", "-p", `@${promptFile}`],
-            { cwd: wt.path, detached: true, stdio: ["ignore", logHandle.fd, logHandle.fd], env }
+            wt.path,
+            opts.sandbox
           );
+
+          const logHandle = await fs.open(logFile, "a");
+          const child = spawn(bin, launchArgs, {
+            cwd: wt.path,
+            detached: true,
+            stdio: ["ignore", logHandle.fd, logHandle.fd],
+            env,
+          });
           child.unref();
           await logHandle.close();
           await updateSession(session.id, { status: "busy", pid: child.pid });
@@ -188,6 +204,7 @@ interface LoopDaemonOpts {
   env: Record<string, string>;
   maxIter: number;
   until: string;
+  sandbox?: boolean;
 }
 
 async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
@@ -199,18 +216,26 @@ async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
   await fs.writeFile(promptFile, preamble + prompt, "utf-8");
 
   const loopScript = path.join(worktreePath, ".ccmux-loop.sh");
+  const { bin: claudeBin, args: claudeSandboxArgs } = buildLaunchArgs(
+    ["--dangerously-skip-permissions", "-p", `@${promptFile}`],
+    worktreePath,
+    opts.sandbox
+  );
+  const claudeInvocation = [claudeBin, ...claudeSandboxArgs]
+    .map((a) => `"${a.replace(/"/g, '\\"')}"`)
+    .join(" ");
+
   const scriptContent = [
     `#!/usr/bin/env bash`,
     `set -euo pipefail`,
     `MAX_ITER="${maxIter}"`,
     `UNTIL_PATTERN="${until.replace(/"/g, '\\"')}"`,
     `LOGFILE="${logFile.replace(/"/g, '\\"')}"`,
-    `PROMPT_FILE="${promptFile.replace(/"/g, '\\"')}"`,
     `ITER=0`,
     `while [ "$ITER" -lt "$MAX_ITER" ]; do`,
     `  ITER=$((ITER + 1))`,
     `  echo "=== ccmux loop iteration $ITER / $MAX_ITER ===" >> "$LOGFILE"`,
-    `  claude --dangerously-skip-permissions -p "@$PROMPT_FILE" >> "$LOGFILE" 2>&1 || true`,
+    `  ${claudeInvocation} >> "$LOGFILE" 2>&1 || true`,
     `  if grep -qF "$UNTIL_PATTERN" "$LOGFILE"; then`,
     `    echo "=== CCMUX_LOOP_COMPLETE ===" >> "$LOGFILE"`,
     `    exit 0`,
@@ -230,4 +255,48 @@ async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
   });
   child.unref();
   await logHandle.close();
+}
+
+/**
+ * Optionally wrap the claude invocation in bubblewrap for OS-level sandboxing.
+ * git worktrees share the object store and do NOT isolate the filesystem —
+ * bubblewrap is the only reliable containment for --dangerously-skip-permissions.
+ *
+ * Requires: bwrap (bubblewrap) installed on the system.
+ */
+function buildLaunchArgs(
+  claudeArgs: string[],
+  worktreePath: string,
+  sandbox?: boolean
+): { bin: string; args: string[] } {
+  if (!sandbox) {
+    return { bin: "claude", args: claudeArgs };
+  }
+
+  // bubblewrap sandbox: bind-mount worktree as /workspace, share /usr /lib /bin,
+  // no network (--unshare-net), no new privs, tmpfs home overlay.
+  const bwrapArgs = [
+    "--unshare-pid",
+    "--unshare-net",      // block network (forces local-LLM-only via env vars)
+    "--unshare-uts",
+    "--ro-bind", "/usr", "/usr",
+    "--ro-bind", "/lib", "/lib",
+    "--ro-bind", "/lib64", "/lib64",
+    "--ro-bind", "/bin", "/bin",
+    "--ro-bind", "/sbin", "/sbin",
+    "--ro-bind", "/etc/resolv.conf", "/etc/resolv.conf",
+    "--ro-bind", "/etc/passwd", "/etc/passwd",
+    "--proc", "/proc",
+    "--dev", "/dev",
+    "--tmpfs", "/tmp",
+    "--tmpfs", "/root",
+    "--bind", worktreePath, "/workspace",
+    "--chdir", "/workspace",
+    "--new-session",
+    "--die-with-parent",
+    "claude",
+    ...claudeArgs,
+  ];
+
+  return { bin: "bwrap", args: bwrapArgs };
 }

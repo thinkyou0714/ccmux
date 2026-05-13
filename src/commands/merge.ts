@@ -37,12 +37,16 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
 
     let targetBranch = opts.target;
     if (!targetBranch) {
-      try {
-        const { stdout } = await execa("git", ["-C", session.projectPath, "symbolic-ref", "--short", "HEAD"], { stdio: "pipe" });
-        targetBranch = stdout.trim();
-      } catch {
-        targetBranch = "main";
+      for (const candidate of ["main", "master"]) {
+        try {
+          await execa("git", ["-C", session.projectPath, "rev-parse", "--verify", candidate], { stdio: "pipe" });
+          targetBranch = candidate;
+          break;
+        } catch {
+          // branch not found, try next
+        }
       }
+      targetBranch ??= "main";
     }
 
     const branch = `ccmux/${name}`;
@@ -56,6 +60,9 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
     try {
       await execa("git", ["-C", session.projectPath, "checkout", targetBranch], { stdio: "pipe" });
       await execa("git", ["-C", session.projectPath, ...mergeArgs], { stdio: "pipe" });
+      if (opts.squash) {
+        await execa("git", ["-C", session.projectPath, "commit", "-m", `ccmux: squash merge ${branch}`], { stdio: "pipe" });
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("CONFLICT") || msg.includes("conflict")) {

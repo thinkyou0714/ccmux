@@ -57,6 +57,11 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
   try {
     const diff = await getWorktreeDiff(session.worktreePath);
 
+    spinner.text = "Gathering handoff data...";
+    const claudeMdContent = await readClaudeMd(session.worktreePath);
+    const gitLog = await getGitLog(session.worktreePath);
+    const todos = extractTodos(claudeMdContent);
+
     spinner.text = "Closing terminal tab...";
     await closeTab(name);
 
@@ -74,10 +79,6 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
     }
 
     if (!opts.noHandoff) {
-      spinner.text = "Gathering handoff data...";
-      const claudeMdContent = await readClaudeMd(session.worktreePath);
-      const gitLog = await getGitLog(session.worktreePath);
-      const todos = extractTodos(claudeMdContent);
 
       const handoffData = {
         sessionName: session.name,
@@ -91,16 +92,13 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
         gitLog,
       };
 
+      await writeLocalHandoff(handoffData);
       if (cfg.obsidian.enabled) {
         spinner.text = "Writing Obsidian handoff...";
         const ok = await writeObsidianHandoff(handoffData, cfg.obsidian);
         if (ok) {
           console.log(chalk.dim(`  handoff → Obsidian: ${cfg.obsidian.handoffPath}`));
-        } else {
-          await writeLocalHandoff(handoffData);
         }
-      } else {
-        await writeLocalHandoff(handoffData);
       }
     }
 

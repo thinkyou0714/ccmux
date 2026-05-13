@@ -91,7 +91,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, authT
       const sessionName = `issue-${issue.number}`;
       const prompt = `Issue #${issue.number}: ${issue.title}\n\n${issue.body ?? ""}`;
 
-      await autoCommand(sessionName, { prompt });
+      try {
+        await autoCommand(sessionName, { prompt });
+      } catch (cmdErr: unknown) {
+        const message = cmdErr instanceof Error ? cmdErr.message : String(cmdErr);
+        return send(res, 500, { error: message, sessionName });
+      }
       return send(res, 200, { ok: true, sessionName });
     }
 

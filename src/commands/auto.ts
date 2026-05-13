@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import ora from "ora";
 import { execa } from "execa";
+import { spawn } from "child_process";
 import fs from "fs/promises";
 import path from "path";
 import { createWorktree } from "../core/worktree.js";
@@ -44,8 +45,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
   const project = cfg.projects[projectKey];
 
   if (!project) {
-    console.error(chalk.red(`defaultProject "${projectKey}" not found. Run: ccmux init`));
-    process.exit(1);
+    throw new Error(`defaultProject "${projectKey}" not found. Run: ccmux init`);
   }
 
   const { type: muxType } = getMuxInfo();
@@ -96,21 +96,22 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
         await fs.mkdir(logDir, { recursive: true });
         const logFile = path.join(logDir, `${sessionName}.log`);
 
-        const env = {
-          ...process.env,
+        const env: Record<string, string> = {
+          ...(process.env as Record<string, string>),
           CCMUX_SESSION: sessionName,
         };
+        if (project.defaultLlm === "autoclaw") {
+          env["ANTHROPIC_BASE_URL"] = cfg.autoclaw.url;
+        }
 
-        // Spawn detached background process
-        const child = execa(
-          "bash",
-          [
-            "-c",
-            `cd "${wt.path}" && ${baseClaudeCmd} --dangerously-skip-permissions -p ${JSON.stringify(opts.prompt)} >> "${logFile}" 2>&1`,
-          ],
-          { detached: true, stdio: "ignore", env }
+        const logHandle = await fs.open(logFile, "a");
+        const child = spawn(
+          "claude",
+          ["--dangerously-skip-permissions", "-p", opts.prompt],
+          { cwd: wt.path, detached: true, stdio: ["ignore", logHandle.fd, logHandle.fd], env }
         );
         child.unref();
+        await logHandle.close();
 
         await updateSession(session.id, { status: "busy", pid: child.pid });
         spinner.succeed(chalk.green(`"${sessionName}" running as daemon`));

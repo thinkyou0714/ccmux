@@ -18,10 +18,26 @@ function autoName(): string {
 }
 
 export interface AutoOptions {
-  prompt?: string;  // Initial prompt to send to CC after startup
+  prompt?: string;
+  resume?: string;
 }
 
 export async function autoCommand(name?: string, opts: AutoOptions = {}): Promise<void> {
+  if (opts.resume && !opts.prompt) {
+    const handoffsDir = path.join(CCMUX_DIR, "handoffs");
+    try {
+      const files = await fs.readdir(handoffsDir);
+      const matches = files.filter((f) => f.endsWith(`-${opts.resume}.md`)).sort();
+      if (matches.length > 0) {
+        const latest = path.join(handoffsDir, matches[matches.length - 1]);
+        const content = await fs.readFile(latest, "utf-8");
+        opts.prompt = `前セッション ${opts.resume} の続きです:\n\n${content}`;
+      }
+    } catch {
+      // handoffs dir not found — proceed without resume prompt
+    }
+  }
+
   const sessionName = name ?? autoName();
   const cfg = await loadConfig();
   const projectKey = cfg.defaultProject;

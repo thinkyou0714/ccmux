@@ -6,6 +6,10 @@ import { closeCommand } from "./commands/close.js";
 import { swapCommand } from "./commands/swap.js";
 import { autoCommand } from "./commands/auto.js";
 import { serveCommand } from "./commands/serve.js";
+import { doctorCommand } from "./commands/doctor.js";
+import { pruneCommand } from "./commands/prune.js";
+import { logsCommand } from "./commands/logs.js";
+import { mergeCommand } from "./commands/merge.js";
 import { initConfig } from "./config/schema.js";
 
 const program = new Command();
@@ -30,7 +34,8 @@ program
   .alias("ls")
   .description("List all active sessions")
   .option("-a, --all", "Include closed sessions")
-  .action(async (opts: { all?: boolean }) => {
+  .option("-j, --json", "Output sessions as JSON")
+  .action(async (opts: { all?: boolean; json?: boolean }) => {
     await initConfig();
     await listCommand(opts);
   });
@@ -59,7 +64,8 @@ program
   .description("Auto-launch an autonomous CC session (--dangerously-skip-permissions)")
   .option("--prompt <text>", "Initial prompt to send to CC after startup")
   .option("--prompt-file <path>", "Read initial prompt from a file (avoids shell injection)")
-  .action(async (name: string | undefined, opts: { prompt?: string; promptFile?: string }) => {
+  .option("--resume <name>", "Resume from the latest handoff of a closed session")
+  .action(async (name: string | undefined, opts: { prompt?: string; promptFile?: string; resume?: string }) => {
     await initConfig();
     if (opts.promptFile && !opts.prompt) {
       const { default: fs } = await import("fs/promises");
@@ -75,6 +81,52 @@ program
   .action(async (opts: { port?: number }) => {
     await initConfig();
     await serveCommand(opts);
+  });
+
+program
+  .command("doctor")
+  .description("Check dependencies and configuration")
+  .action(async () => {
+    await doctorCommand();
+  });
+
+program
+  .command("prune")
+  .description("Remove orphaned sessions and worktrees")
+  .option("--dry-run", "Show what would be removed without deleting")
+  .option("-f, --force", "Force remove even with uncommitted changes")
+  .action(async (opts: { dryRun?: boolean; force?: boolean }) => {
+    await initConfig();
+    await pruneCommand(opts);
+  });
+
+program
+  .command("logs [name]")
+  .description("View daemon session logs")
+  .option("-f, --follow", "Follow log output in real time")
+  .option("-n, --lines <number>", "Number of lines to show", parseInt, 50)
+  .option("-a, --all", "List all log files")
+  .option("--clean", "Remove old log files")
+  .option("--older-than <days>", "Days threshold for --clean", parseInt, 30)
+  .option("--dry-run", "Show what would be removed without deleting")
+  .action(async (name: string | undefined, opts: { follow?: boolean; lines?: number; all?: boolean; clean?: boolean; olderThan?: number; dryRun?: boolean }) => {
+    await initConfig();
+    await logsCommand(name, opts);
+  });
+
+program
+  .command("merge <name>")
+  .description("Merge session branch into main and close")
+  .option("--squash", "Squash commits before merging")
+  .option("--no-ff", "No fast-forward merge")
+  .option("--target <branch>", "Target branch (default: main or master)")
+  .option("--keep", "Keep session open after merge")
+  .option("--pr", "Create GitHub PR after push (requires gh CLI)")
+  .option("--draft", "Create PR as draft")
+  .option("--reviewer <user>", "Assign reviewer to PR")
+  .action(async (name: string, opts: { squash?: boolean; noFf?: boolean; target?: string; keep?: boolean; pr?: boolean; draft?: boolean; reviewer?: string }) => {
+    await initConfig();
+    await mergeCommand(name, opts);
   });
 
 program

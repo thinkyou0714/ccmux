@@ -21,12 +21,15 @@ export interface CcmuxConfig {
     enabled: boolean;
     webhookUrl: string;
     servePort: number;
+    authToken?: string;
+    tls?: { certFile: string; keyFile: string };
   };
   obsidian: {
     enabled: boolean;
     baseUrl: string;
     apiKey: string;
     handoffPath: string;
+    handoffTemplatePath?: string;
   };
   autoclaw: {
     url: string;
@@ -35,6 +38,11 @@ export interface CcmuxConfig {
     enabled: boolean;
     currency: "JPY" | "USD";
     exchangeRate: number;
+    budgetUSD?: number;
+  };
+  logs: {
+    maxAgeDays: number;
+    maxSizeMB: number;
   };
 }
 
@@ -53,6 +61,7 @@ const DEFAULTS: CcmuxConfig = {
   },
   autoclaw: { url: "http://autoclaw:3101/task" },
   cost: { enabled: true, currency: "JPY", exchangeRate: 155 },
+  logs: { maxAgeDays: 30, maxSizeMB: 100 },
 };
 
 let _config: CcmuxConfig | null = null;

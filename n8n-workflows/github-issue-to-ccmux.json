@@ -1,0 +1,122 @@
+{
+  "name": "GitHub Issue → ccmux Session",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github-issues",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "GitHub Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "check-action",
+              "leftValue": "={{ $json.body.action }}",
+              "rightValue": "opened",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-opened",
+      "name": "IF issue opened",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const issue = $input.first().json.body.issue;\nconst sessionName = `issue-${issue.number}`;\nconst prompt = `Issue #${issue.number}: ${issue.title}\\n\\n${issue.body || ''}`;\nreturn [{ json: { sessionName, prompt, issueNumber: issue.number, issueTitle: issue.title } }];"
+      },
+      "id": "set-session-params",
+      "name": "Build Session Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:9090/webhook/github",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-GitHub-Event", "value": "issues" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ action: 'opened', issue: { number: $json.issueNumber, title: $json.issueTitle, body: $json.prompt } }) }}",
+        "options": {}
+      },
+      "id": "post-ccmux",
+      "name": "POST to ccmux",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 220]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": true }",
+        "options": {}
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": false, \"reason\": \"not an opened issue\" }",
+        "options": {}
+      },
+      "id": "respond-skip",
+      "name": "Respond Skip",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [680, 400]
+    }
+  ],
+  "connections": {
+    "GitHub Webhook": {
+      "main": [[{ "node": "IF issue opened", "type": "main", "index": 0 }]]
+    },
+    "IF issue opened": {
+      "main": [
+        [{ "node": "Build Session Params", "type": "main", "index": 0 }],
+        [{ "node": "Respond Skip", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Session Params": {
+      "main": [[{ "node": "POST to ccmux", "type": "main", "index": 0 }]]
+    },
+    "POST to ccmux": {
+      "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ccmux",
+    "notes": "GitHub webhook → n8n → ccmux serve /webhook/github → ccmux auto session\n\nSetup:\n1. In GitHub repo: Settings → Webhooks → Add webhook\n   Payload URL: https://<your-n8n>/webhook/github-issues\n   Content type: application/json\n   Events: Issues only\n2. In n8n: Import this workflow, set active=true\n3. Run: ccmux serve  (listens on :9090)\n\nOptional: Set n8n.authToken in ~/.ccmux/config.json and add\nAuthorization header to the HTTP Request node."
+  },
+  "id": "github-issue-to-ccmux",
+  "tags": [{ "name": "ccmux" }]
+}

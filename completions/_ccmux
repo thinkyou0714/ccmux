@@ -1,0 +1,33 @@
+#compdef ccmux
+
+_ccmux_sessions() {
+  local sessions
+  sessions=(${(f)"$(ccmux list --json 2>/dev/null | node -e "
+    let d='';
+    process.stdin.on('data',c=>d+=c);
+    process.stdin.on('end',()=>{
+      try{JSON.parse(d).forEach(s=>process.stdout.write(s.name+'\n'));}catch{}
+    });
+  " 2>/dev/null)"})
+  compadd "$@" -- $sessions
+}
+
+_ccmux() {
+  local state
+  _arguments \
+    '1: :->command' \
+    '*: :->args'
+
+  case $state in
+    command)
+      compadd new list ls close rm swap auto serve merge logs prune doctor init
+      ;;
+    args)
+      case ${words[2]} in
+        close|rm|logs|merge) _ccmux_sessions ;;
+      esac
+      ;;
+  esac
+}
+
+_ccmux

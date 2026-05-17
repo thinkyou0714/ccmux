@@ -3,18 +3,30 @@ on:
   push:
     branches: ["**"]
   pull_request:
-    branches: [main]
+    branches: [main, master]
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm run build
-      - name: Test
-        run: npm test -- --reporter=verbose
+      - name: Build (tsc)
+        run: npm run build
+      - name: Unit tests
+        run: npm test -- --reporter=verbose --exclude "tests/integration/**"
+      - name: Integration tests (mock LLM)
+        run: npm test -- --reporter=verbose tests/integration
+        # The integration suite spawns a stub HTTP server + drives ccmux auto.
+        # Keep it separate so a flaky stub never masks unit failures.
+        timeout-minutes: 5

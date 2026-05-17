@@ -126,10 +126,13 @@ if [ "$\{CCMUX_DISABLE_CCUSAGE:-0}" != "1" ] && [ -f "$TASK_STATE_FILE" ]; then
         try {
           let txt = fs.readFileSync(file, "utf-8");
           const line = "- **Cost**: $" + cost + " USD";
+          // Use replacer functions so the literal "$" / "$1" inside the
+          // line value (e.g. "$1.23") is NOT re-interpreted as a capture
+          // group reference by String.prototype.replace.
           if (/^- \\*\\*Cost\\*\\*:/m.test(txt)) {
-            txt = txt.replace(/^- \\*\\*Cost\\*\\*:.*$/m, line);
+            txt = txt.replace(/^- \\*\\*Cost\\*\\*:.*$/m, () => line);
           } else if (/^- \\*\\*Last Updated\\*\\*:/m.test(txt)) {
-            txt = txt.replace(/^(- \\*\\*Last Updated\\*\\*:.*)$/m, line + "\\n$1");
+            txt = txt.replace(/^(- \\*\\*Last Updated\\*\\*:.*)$/m, (_, lu) => line + "\\n" + lu);
           }
           fs.writeFileSync(file, txt, "utf-8");
         } catch { /* never block */ }

@@ -52,6 +52,14 @@
 | **BL-3 Stop hookサーキットブレーカー** | `src/core/hooks.ts` `writeStopHook` — 60s 窓 5 fires でトリップ / context_length_exceeded 等のパターン検出で即許可。`CCMUX_CIRCUIT_FIRES` / `CCMUX_CIRCUIT_WINDOW_SEC` で調整 |
 | **Windows daemon spawn fix** | `src/commands/auto.ts` — Windows では `claude` が `.cmd` shim のため `spawn(..., {shell: true})` で起動。Linux/macOS は従来通り |
 
+### 実装済み・MEDIUM優先度 ✅ (2026-05-17 land)
+
+| 機能 | ファイル |
+|---|---|
+| **BL-4 ccusage コスト連携** | `src/core/hooks.ts` `writeStopHook` — `ccusage session --id` で取得したコストを TASK_STATE.md の `- **Cost**: $X.XX USD` 行に upsert。`CCMUX_DISABLE_CCUSAGE=1` でオフ。ccusage 未インストール時は silent skip |
+| **BL-5 .worktreeinclude 自動コピー** | `src/core/worktree.ts` `applyWorktreeInclude` — projectPath の `.worktreeinclude` をパース、各行のファイル (`.env` / `secrets.json` / IDE 設定など) を新 worktree に複製。コメント (`#`) と空行をスキップ、欠損ファイルは stderr 警告のみ |
+| **worktreeBase config 反映** | `src/core/worktree.ts` `resolveWorktreeBase` — `cfg.worktreeBase` (caller 渡し) → `CCMUX_WORKTREE_BASE` env → `${HOME}/worktrees` の解決順位。`auto.ts` / `new.ts` / `close.ts` が `cfg.worktreeBase` を渡す |
+
 ### Phase 0 検証ステータス (2026-05-17)
 
 実機検証結果 (Windows 11 / qwen2.5-coder:7b on CPU):
@@ -83,7 +91,6 @@ litellm --config litellm-config.example.yaml --port 3101
 
 | 機能 | 理由 |
 |---|---|
-| **ccusageコスト連携** | セッション終了時に`costUSD`をTASK_STATE.mdに記録 |
 | **SQLiteタスクキュー** | 複数セッション間の原子的タスク分配（amuxパターン） |
 
 ---

@@ -9,17 +9,36 @@ export interface WorktreeInfo {
   projectPath: string;
 }
 
-const WORKTREE_BASE = process.env.CCMUX_WORKTREE_BASE ?? `${process.env.HOME}/worktrees`;
+export interface CreateWorktreeOptions {
+  /**
+   * Override the worktree base directory. Resolution order (highest first):
+   *   1. `options.worktreeBase` (passed by caller — typically `cfg.worktreeBase`)
+   *   2. `CCMUX_WORKTREE_BASE` env var (escape hatch for one-off runs)
+   *   3. `${HOME}/worktrees` fallback (unchanged from pre-Phase 0 behavior)
+   */
+  worktreeBase?: string;
+}
+
 const BRANCH_PREFIX = "ccmux";
+
+export function resolveWorktreeBase(override?: string): string {
+  return (
+    override ??
+    process.env.CCMUX_WORKTREE_BASE ??
+    `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/worktrees`
+  );
+}
 
 export async function createWorktree(
   name: string,
-  projectPath: string
+  projectPath: string,
+  options: CreateWorktreeOptions = {},
 ): Promise<WorktreeInfo> {
   const branch = `${BRANCH_PREFIX}/${name}`;
-  const wtPath = path.join(WORKTREE_BASE, name);
+  const worktreeBase = resolveWorktreeBase(options.worktreeBase);
+  const wtPath = path.join(worktreeBase, name);
 
-  await fs.mkdir(WORKTREE_BASE, { recursive: true });
+  await fs.mkdir(worktreeBase, { recursive: true });
 
   // Check if worktree already exists
   const existing = await listWorktrees(projectPath);
@@ -44,14 +63,67 @@ export async function createWorktree(
     }
   }
 
+  // BL-5: copy files listed in .worktreeinclude into the new worktree.
+  // Best-effort — failures don't break worktree creation.
+  await applyWorktreeInclude(projectPath, wtPath);
+
   return { name, branch, path: wtPath, projectPath };
+}
+
+/**
+ * BL-5: read `.worktreeinclude` (gitignore-style, but for files we DO want
+ * copied into a worktree even though they are typically gitignored — `.env`,
+ * `secrets.json`, IDE config). Each non-comment, non-empty line is a path
+ * relative to `projectPath`, copied to the same relative path under `wtPath`.
+ *
+ * No glob support. Missing source files are silently skipped (warning to
+ * stderr) so a partially-populated `.worktreeinclude` doesn't fail the worktree.
+ */
+export async function applyWorktreeInclude(
+  projectPath: string,
+  wtPath: string,
+): Promise<{ copied: string[]; missing: string[] }> {
+  const cfgFile = path.join(projectPath, ".worktreeinclude");
+  const result = { copied: [] as string[], missing: [] as string[] };
+
+  let raw: string;
+  try {
+    raw = await fs.readFile(cfgFile, "utf-8");
+  } catch {
+    return result; // no .worktreeinclude → nothing to do
+  }
+
+  const entries = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith("#"));
+
+  for (const rel of entries) {
+    const src = path.join(projectPath, rel);
+    const dst = path.join(wtPath, rel);
+    try {
+      await fs.mkdir(path.dirname(dst), { recursive: true });
+      await fs.copyFile(src, dst);
+      result.copied.push(rel);
+    } catch (err: unknown) {
+      result.missing.push(rel);
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `ccmux: .worktreeinclude — could not copy "${rel}" (${msg.slice(0, 100)})\n`,
+      );
+    }
+  }
+
+  return result;
 }
 
 export async function deleteWorktree(
   name: string,
-  projectPath: string
+  projectPath: string,
+  options: CreateWorktreeOptions = {},
 ): Promise<void> {
-  const wtPath = path.join(WORKTREE_BASE, name);
+  const worktreeBase = resolveWorktreeBase(options.worktreeBase);
+  const wtPath = path.join(worktreeBase, name);
   const branch = `${BRANCH_PREFIX}/${name}`;
 
   // Check for uncommitted changes

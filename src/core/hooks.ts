@@ -104,6 +104,40 @@ if echo "$INPUT" | grep -iEq 'context_limit|context_window|context_exceeded|toke
   exit 0
 fi
 
+# --- BL-4: ccusage cost capture (best-effort) ---
+# Record running cost into TASK_STATE.md so handoffs preserve it. We invoke
+# ccusage directly and ignore failures: missing binary / unknown session id /
+# ccusage version mismatch all degrade to "no cost line written" rather than
+# blocking the Stop hook. CCMUX_DISABLE_CCUSAGE=1 to opt out completely.
+if [ "$\{CCMUX_DISABLE_CCUSAGE:-0}" != "1" ] && [ -f "$TASK_STATE_FILE" ]; then
+  SESSION_ID=$(echo "$INPUT" | node -e '
+    let raw = "";
+    process.stdin.on("data", (c) => raw += c);
+    process.stdin.on("end", () => {
+      try { process.stdout.write(JSON.parse(raw).session_id || ""); } catch {}
+    });
+  ' 2>/dev/null || true)
+  if [ -n "$SESSION_ID" ]; then
+    COST=$(ccusage session --id "$SESSION_ID" --json --jq '.sessions[0].costUSD // 0' 2>/dev/null)
+    if [ -n "$COST" ]; then
+      node -e '
+        const fs = require("fs");
+        const [file, cost] = [process.argv[1], process.argv[2]];
+        try {
+          let txt = fs.readFileSync(file, "utf-8");
+          const line = "- **Cost**: $" + cost + " USD";
+          if (/^- \\*\\*Cost\\*\\*:/m.test(txt)) {
+            txt = txt.replace(/^- \\*\\*Cost\\*\\*:.*$/m, line);
+          } else if (/^- \\*\\*Last Updated\\*\\*:/m.test(txt)) {
+            txt = txt.replace(/^(- \\*\\*Last Updated\\*\\*:.*)$/m, line + "\\n$1");
+          }
+          fs.writeFileSync(file, txt, "utf-8");
+        } catch { /* never block */ }
+      ' "$TASK_STATE_FILE" "$COST" 2>/dev/null || true
+    fi
+  fi
+fi
+
 # --- Infinite loop guard ---
 # stop_hook_active=true means this hook already fired this turn.
 if echo "$INPUT" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true' 2>/dev/null; then

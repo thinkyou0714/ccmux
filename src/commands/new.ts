@@ -30,7 +30,7 @@ export async function newCommand(name: string, opts: NewOptions): Promise<void> 
 
     // 1. Create git worktree
     spinner.text = "Creating git worktree...";
-    const wt = await createWorktree(name, project.path);
+    const wt = await createWorktree(name, project.path, { worktreeBase: cfg.worktreeBase });
 
     // 2. Determine the claude command
     const claudeCmd = await resolveClaudeCmd(llm);

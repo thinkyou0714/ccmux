@@ -61,7 +61,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
     await acquireLock(sessionName);
 
     spinner.text = "Creating git worktree...";
-    const wt = await createWorktree(sessionName, project.path);
+    const wt = await createWorktree(sessionName, project.path, { worktreeBase: cfg.worktreeBase });
 
     const session = await createSession({
       name: sessionName,

@@ -7,6 +7,7 @@ import { newCommand } from "../commands/new.js";
 import { closeCommand } from "../commands/close.js";
 import { listSessions } from "../core/session.js";
 import { autoCommand } from "../commands/auto.js";
+import { claimSession, releaseSession } from "../core/queue.js";
 
 type JsonBody = Record<string, unknown>;
 
@@ -158,9 +159,26 @@ async function handle(
       const sessionName = `issue-${issue.number}`;
       const prompt = `Issue #${issue.number}: ${issue.title}\n\n${issue.body ?? ""}`;
 
+      // BL-6: SQLite dedup queue. The webhook receiver is the only place a
+      // race can happen (n8n retry + GitHub redelivery both hitting at once);
+      // the queue gives us an atomic INSERT OR IGNORE so the second caller
+      // returns 200 with `dedup: true` without ever spawning a worktree.
+      const claim = claimSession(sessionName, "github");
+      if (!claim.claimed) {
+        return send(res, 200, {
+          ok: true,
+          dedup: true,
+          sessionName,
+          existing: claim.existing,
+        });
+      }
+
       try {
         await autoCommand(sessionName, { prompt });
       } catch (cmdErr: unknown) {
+        // Auto failed before close — drop the queue row so a manual
+        // re-trigger isn't permanently blocked by the dedup gate.
+        releaseSession(sessionName);
         const message = cmdErr instanceof Error ? cmdErr.message : String(cmdErr);
         return send(res, 500, { error: message, sessionName });
       }

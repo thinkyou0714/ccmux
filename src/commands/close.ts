@@ -1,5 +1,8 @@
 import chalk from "chalk";
 import ora from "ora";
+import fs from "fs/promises";
+import path from "path";
+import { execa } from "execa";
 import { getSession, updateSession } from "../core/session.js";
 import { deleteWorktree, getWorktreeDiff } from "../core/worktree.js";
 import { closeTab } from "../core/zellij.js";
@@ -7,9 +10,37 @@ import { releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { writeObsidianHandoff } from "../integrations/obsidian.js";
 
+const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
+
 export interface CloseOptions {
   force?: boolean;
   noHandoff?: boolean;
+}
+
+async function readClaudeMd(worktreePath: string): Promise<string | undefined> {
+  try {
+    return await fs.readFile(path.join(worktreePath, "CLAUDE.md"), "utf-8");
+  } catch {
+    return undefined;
+  }
+}
+
+async function getGitLog(worktreePath: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execa("git", ["-C", worktreePath, "log", "--oneline", "-10"], { stdio: "pipe" });
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractTodos(claudeMdContent: string | undefined): string[] {
+  if (!claudeMdContent) return [];
+  return claudeMdContent
+    .split("\n")
+    .filter((l) => l.trimStart().startsWith("[ ] ") || l.trimStart().startsWith("- [ ] "))
+    .map((l) => l.replace(/^\s*-?\s*\[\s*\]\s*/, "").trim())
+    .filter(Boolean);
 }
 
 export async function closeCommand(name: string, opts: CloseOptions): Promise<void> {
@@ -24,17 +55,19 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
   const spinner = ora(`Closing session "${name}"...`).start();
 
   try {
-    // 1. Get diff summary before deletion
     const diff = await getWorktreeDiff(session.worktreePath);
 
-    // 2. Close the Zellij/tmux tab
+    spinner.text = "Gathering handoff data...";
+    const claudeMdContent = await readClaudeMd(session.worktreePath);
+    const gitLog = await getGitLog(session.worktreePath);
+    const todos = extractTodos(claudeMdContent);
+
     spinner.text = "Closing terminal tab...";
     await closeTab(name);
 
-    // 3. Delete worktree (may throw if dirty and !force)
     spinner.text = "Removing worktree...";
     try {
-      await deleteWorktree(name, session.projectPath);
+      await deleteWorktree(name, session.projectPath, { worktreeBase: cfg.worktreeBase });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("uncommitted") && !opts.force) {
@@ -45,16 +78,30 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
       if (!opts.force) throw err;
     }
 
-    // 4. Write handoff
-    if (!opts.noHandoff && cfg.obsidian.enabled) {
-      spinner.text = "Writing Obsidian handoff...";
-      await writeHandoff(session.name, session.branch, diff, cfg);
-    } else if (!opts.noHandoff) {
-      // Write to local file as fallback
-      await writeLocalHandoff(session.name, session.branch, diff);
+    if (!opts.noHandoff) {
+
+      const handoffData = {
+        sessionName: session.name,
+        branch: session.branch,
+        diff,
+        costUSD: session.costUSD,
+        currency: cfg.cost.currency,
+        exchangeRate: cfg.cost.exchangeRate,
+        claudeMdContent,
+        todos,
+        gitLog,
+      };
+
+      await writeLocalHandoff(handoffData);
+      if (cfg.obsidian.enabled) {
+        spinner.text = "Writing Obsidian handoff...";
+        const ok = await writeObsidianHandoff(handoffData, cfg.obsidian);
+        if (ok) {
+          console.log(chalk.dim(`  handoff → Obsidian: ${cfg.obsidian.handoffPath}`));
+        }
+      }
     }
 
-    // 5. Update session status
     await updateSession(session.id, { status: "closed" });
     await releaseLock(name);
 
@@ -73,51 +120,46 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
   }
 }
 
-async function writeLocalHandoff(name: string, branch: string, diff: string): Promise<void> {
-  const { default: fs } = await import("fs/promises");
-  const { default: path } = await import("path");
-  const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
+async function writeLocalHandoff(data: {
+  sessionName: string;
+  branch: string;
+  diff: string;
+  claudeMdContent?: string;
+  todos?: string[];
+  gitLog?: string;
+}): Promise<void> {
   const dir = path.join(CCMUX_DIR, "handoffs");
   await fs.mkdir(dir, { recursive: true });
 
   const date = new Date().toISOString().slice(0, 10);
-  const file = path.join(dir, `${date}-${name}.md`);
-  const content = [
-    `# ccmux handoff: ${name}`,
+  const file = path.join(dir, `${date}-${data.sessionName}.md`);
+
+  const parts: string[] = [
+    `# ccmux handoff: ${data.sessionName}`,
     ``,
     `- date: ${new Date().toISOString()}`,
-    `- branch: ${branch}`,
+    `- branch: ${data.branch}`,
     ``,
     `## diff summary`,
     ``,
-    diff || "(no changes)",
-    ``,
-  ].join("\n");
+    data.diff || "(no changes)",
+  ];
 
-  await fs.writeFile(file, content, "utf-8");
-  console.log(chalk.dim(`  handoff saved: ${file}`));
-}
-
-async function writeHandoff(
-  name: string,
-  branch: string,
-  diff: string,
-  cfg: Awaited<ReturnType<typeof loadConfig>>
-): Promise<void> {
-  const ok = await writeObsidianHandoff(
-    {
-      sessionName: name,
-      branch,
-      diff,
-      costUSD: 0,
-      currency: cfg.cost.currency,
-      exchangeRate: cfg.cost.exchangeRate,
-    },
-    cfg.obsidian
-  );
-  if (ok) {
-    console.log(chalk.dim(`  handoff → Obsidian: ${cfg.obsidian.handoffPath}`));
-  } else {
-    await writeLocalHandoff(name, branch, diff);
+  if (data.gitLog) {
+    parts.push(``, `## git log`, ``, `\`\`\``, data.gitLog, `\`\`\``);
   }
+
+  if (data.todos && data.todos.length > 0) {
+    parts.push(``, `## todos`, ``);
+    for (const todo of data.todos) parts.push(`- [ ] ${todo}`);
+  }
+
+  if (data.claudeMdContent) {
+    parts.push(``, `## CLAUDE.md`, ``, data.claudeMdContent);
+  }
+
+  parts.push(``);
+
+  await fs.writeFile(file, parts.join("\n"), "utf-8");
+  console.log(chalk.dim(`  handoff saved: ${file}`));
 }

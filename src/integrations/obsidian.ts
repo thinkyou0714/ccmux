@@ -1,19 +1,24 @@
 import https from "https";
 import http from "http";
+import fs from "fs/promises";
 
 interface ObsidianConfig {
   baseUrl: string;
   apiKey: string;
   handoffPath: string;
+  handoffTemplatePath?: string;
 }
 
-interface HandoffData {
+export interface HandoffData {
   sessionName: string;
   branch: string;
   diff: string;
   costUSD?: number;
   currency?: "JPY" | "USD";
   exchangeRate?: number;
+  claudeMdContent?: string;
+  todos?: string[];
+  gitLog?: string;
 }
 
 function resolveObsidianConfig(cfg: ObsidianConfig): ObsidianConfig {
@@ -21,6 +26,7 @@ function resolveObsidianConfig(cfg: ObsidianConfig): ObsidianConfig {
     baseUrl: process.env.OBSIDIAN_BASE_URL ?? cfg.baseUrl,
     apiKey: process.env.OBSIDIAN_API_KEY ?? cfg.apiKey,
     handoffPath: cfg.handoffPath,
+    handoffTemplatePath: cfg.handoffTemplatePath,
   };
 }
 
@@ -43,7 +49,6 @@ async function obsidianRequest(
           "Content-Type": "text/markdown",
           "Content-Length": body.length,
         },
-        // Allow self-signed certs from Obsidian REST API
         rejectUnauthorized: false,
       },
       (res) => {
@@ -64,6 +69,63 @@ async function obsidianRequest(
   });
 }
 
+function buildDefaultContent(data: HandoffData): string {
+  const date = new Date().toISOString();
+  const costLine =
+    data.costUSD != null
+      ? data.currency === "JPY"
+        ? `- cost: ¥${Math.round(data.costUSD * (data.exchangeRate ?? 150))}`
+        : `- cost: $${data.costUSD.toFixed(3)}`
+      : "";
+
+  const parts: string[] = [
+    `# ccmux handoff: ${data.sessionName}`,
+    ``,
+    `- date: ${date}`,
+    `- branch: ${data.branch}`,
+  ];
+  if (costLine) parts.push(costLine);
+  parts.push(``, `## diff summary`, ``, `\`\`\``, data.diff || "(no changes)", `\`\`\``);
+
+  if (data.gitLog) {
+    parts.push(``, `## git log`, ``, `\`\`\``, data.gitLog, `\`\`\``);
+  }
+
+  if (data.todos && data.todos.length > 0) {
+    parts.push(``, `## todos`, ``);
+    for (const todo of data.todos) {
+      parts.push(`- [ ] ${todo}`);
+    }
+  }
+
+  if (data.claudeMdContent) {
+    parts.push(``, `## CLAUDE.md`, ``, data.claudeMdContent);
+  }
+
+  parts.push(``);
+  return parts.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
+}
+
+function applyTemplate(template: string, data: HandoffData): string {
+  const date = new Date().toISOString().slice(0, 10);
+  const costStr =
+    data.costUSD != null
+      ? data.currency === "JPY"
+        ? `¥${Math.round(data.costUSD * (data.exchangeRate ?? 150))}`
+        : `$${data.costUSD.toFixed(3)}`
+      : "N/A";
+
+  return template
+    .replace(/\{\{sessionName\}\}/g, data.sessionName)
+    .replace(/\{\{branch\}\}/g, data.branch)
+    .replace(/\{\{diff\}\}/g, data.diff || "(no changes)")
+    .replace(/\{\{claudeMd\}\}/g, data.claudeMdContent ?? "")
+    .replace(/\{\{todos\}\}/g, data.todos ? data.todos.map((t) => `- [ ] ${t}`).join("\n") : "")
+    .replace(/\{\{cost\}\}/g, costStr)
+    .replace(/\{\{date\}\}/g, date)
+    .replace(/\{\{gitLog\}\}/g, data.gitLog ?? "");
+}
+
 export async function writeObsidianHandoff(
   data: HandoffData,
   cfg: ObsidianConfig
@@ -76,29 +138,17 @@ export async function writeObsidianHandoff(
   const fileName = `${date}-${time}-${data.sessionName}.md`;
   const vaultPath = `${resolved.handoffPath}/${fileName}`;
 
-  const costLine =
-    data.costUSD != null
-      ? data.currency === "JPY"
-        ? `- cost: ¥${Math.round(data.costUSD * (data.exchangeRate ?? 150))}`
-        : `- cost: $${data.costUSD.toFixed(3)}`
-      : "";
-
-  const content = [
-    `# ccmux handoff: ${data.sessionName}`,
-    ``,
-    `- date: ${new Date().toISOString()}`,
-    `- branch: ${data.branch}`,
-    costLine,
-    ``,
-    `## diff summary`,
-    ``,
-    `\`\`\``,
-    data.diff || "(no changes)",
-    `\`\`\``,
-    ``,
-  ]
-    .filter((l) => l !== "")
-    .join("\n");
+  let content: string;
+  if (resolved.handoffTemplatePath) {
+    try {
+      const template = await fs.readFile(resolved.handoffTemplatePath, "utf-8");
+      content = applyTemplate(template, data);
+    } catch {
+      content = buildDefaultContent(data);
+    }
+  } else {
+    content = buildDefaultContent(data);
+  }
 
   try {
     await obsidianRequest(resolved, vaultPath, content);

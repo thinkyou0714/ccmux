@@ -5,6 +5,7 @@ import { getTodayCost, formatCost } from "../core/cost.js";
 
 export interface ListOptions {
   all?: boolean;
+  json?: boolean;
 }
 
 function statusColor(status: Session["status"]): string {
@@ -37,13 +38,30 @@ async function getCost(session: Session, exchangeRate: number, currency: string)
 
 export async function listCommand(opts: ListOptions): Promise<void> {
   const pruned = await pruneOrphanedSessions();
-  if (pruned > 0) {
-    console.log(chalk.dim(`  (${pruned} orphaned session(s) detected and marked)`));
-  }
 
   const cfg = await loadConfig();
   const sessions = await listSessions();
   const todayCost = await getTodayCost();
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(sessions, null, 2) + "\n");
+    return;
+  }
+
+  if (pruned > 0) {
+    console.log(chalk.dim(`  (${pruned} orphaned session(s) detected and marked)`));
+  }
+
+  if (cfg.cost.budgetUSD != null && todayCost && todayCost.costUSD > cfg.cost.budgetUSD) {
+    const sym = cfg.cost.currency === "JPY" ? "¥" : "$";
+    const spent = cfg.cost.currency === "JPY"
+      ? `${sym}${Math.round(todayCost.costUSD * cfg.cost.exchangeRate)}`
+      : `${sym}${todayCost.costUSD.toFixed(3)}`;
+    const budget = cfg.cost.currency === "JPY"
+      ? `${sym}${Math.round(cfg.cost.budgetUSD * cfg.cost.exchangeRate)}`
+      : `${sym}${cfg.cost.budgetUSD.toFixed(3)}`;
+    console.log(chalk.yellow(`  ⚠  daily budget exceeded (${spent} / ${budget})`));
+  }
 
   if (sessions.length === 0) {
     const todayDisplay = todayCost

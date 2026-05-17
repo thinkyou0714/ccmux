@@ -1,0 +1,68 @@
+# LiteLLM proxy config for ccmux — hybrid local + cloud routing
+#
+# Usage:
+#   pip install litellm[proxy]
+#   litellm --config litellm-config.example.yaml --port 3101
+#
+# Then set in ~/.ccmux/config.json:
+#   "autoclaw": { "url": "http://localhost:3101", "model": "claude-opus-4-7" }
+#
+# Models declared here map Claude model names to local or cloud backends.
+# LiteLLM routes the request based on the model name in each API call.
+# ccmux passes --model from autoclaw.model; set it to whichever entry below
+# you want as the primary.
+
+model_list:
+  # Primary: local Ollama (free, no API key)
+  # Requires: OLLAMA_CONTEXT_LENGTH=131072 ollama serve && ollama pull qwen3-coder
+  - model_name: claude-opus-4-7
+    litellm_params:
+      model: ollama/qwen3-coder
+      api_base: http://localhost:11434
+      timeout: 600  # long tasks can take minutes per response
+
+  # Mid-tier local: smaller/faster model for quick subtasks
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: ollama/qwen2.5-coder:7b
+      api_base: http://localhost:11434
+      timeout: 120
+
+  # Cloud fallback: only when local model is unavailable or task requires it
+  # Uncomment and set ANTHROPIC_API_KEY env var to enable
+  # - model_name: claude-haiku-4-5
+  #   litellm_params:
+  #     model: anthropic/claude-haiku-4-5-20251001
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+
+litellm_settings:
+  # Automatic fallback: if primary model fails, try next in list
+  fallbacks:
+    - claude-opus-4-7:
+        - claude-sonnet-4-6
+    # Uncomment to fall back to cloud when all local models fail:
+    # - claude-sonnet-4-6:
+    #     - claude-haiku-4-5
+
+  # Per-session iteration budget (prevents infinite loop runaway)
+  # max_budget: 10.00       # USD per day (relevant only if cloud fallback is active)
+  # budget_duration: 1d
+
+  # Request logging for observability (optional; requires langfuse)
+  # success_callback: ["langfuse"]
+  # failure_callback: ["langfuse"]
+  # LANGFUSE_PUBLIC_KEY: os.environ/LANGFUSE_PUBLIC_KEY
+  # LANGFUSE_SECRET_KEY: os.environ/LANGFUSE_SECRET_KEY
+
+  # Drop unsupported parameters (e.g. Anthropic-specific fields Ollama ignores)
+  drop_params: true
+
+# LiteLLM router settings
+router_settings:
+  routing_strategy: simple-shuffle  # or "latency-based-routing", "least-busy"
+  num_retries: 3
+  retry_after: 5  # seconds between retries
+
+# Optional: protect the LiteLLM endpoint with a master key
+# general_settings:
+#   master_key: os.environ/LITELLM_MASTER_KEY

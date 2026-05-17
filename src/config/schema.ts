@@ -1,8 +1,15 @@
 import fs from "fs/promises";
 import path from "path";
 
-const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
-const CONFIG_FILE = path.join(CCMUX_DIR, "config.json");
+// Phase: 90-pt roadmap — lazy resolution so tests can swap CCMUX_DIR / HOME
+// after module load. Capturing these at module scope was forcing every test
+// that touches config to monkey-patch fs.
+function ccmuxDir(): string {
+  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
+}
+function configFile(): string {
+  return path.join(ccmuxDir(), "config.json");
+}
 
 export interface ProjectConfig {
   path: string;
@@ -80,7 +87,7 @@ let _config: CcmuxConfig | null = null;
 export async function loadConfig(): Promise<CcmuxConfig> {
   if (_config) return _config;
   try {
-    const raw = await fs.readFile(CONFIG_FILE, "utf-8");
+    const raw = await fs.readFile(configFile(), "utf-8");
     _config = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<CcmuxConfig>) };
   } catch {
     _config = { ...DEFAULTS };
@@ -89,17 +96,17 @@ export async function loadConfig(): Promise<CcmuxConfig> {
 }
 
 export async function saveConfig(cfg: CcmuxConfig): Promise<void> {
-  await fs.mkdir(CCMUX_DIR, { recursive: true });
-  await fs.writeFile(CONFIG_FILE, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  await fs.mkdir(ccmuxDir(), { recursive: true });
+  await fs.writeFile(configFile(), JSON.stringify(cfg, null, 2), { mode: 0o600 });
   _config = cfg;
 }
 
 export async function initConfig(): Promise<void> {
-  await fs.mkdir(CCMUX_DIR, { recursive: true });
+  await fs.mkdir(ccmuxDir(), { recursive: true });
   try {
-    await fs.access(CONFIG_FILE);
+    await fs.access(configFile());
   } catch {
     await saveConfig(DEFAULTS);
-    console.log(`Created config at ${CONFIG_FILE}`);
+    console.log(`Created config at ${configFile()}`);
   }
 }

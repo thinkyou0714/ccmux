@@ -11,6 +11,8 @@ import { pruneCommand } from "./commands/prune.js";
 import { logsCommand } from "./commands/logs.js";
 import { mergeCommand } from "./commands/merge.js";
 import { reflectCommand } from "./commands/reflect.js";
+import { initCommand } from "./commands/init.js";
+import { dashboardCommand } from "./commands/dashboard.js";
 import { initConfig } from "./config/schema.js";
 
 const program = new Command();
@@ -147,10 +149,23 @@ program
 
 program
   .command("init")
-  .description("Initialize ~/.ccmux/config.json with defaults")
-  .action(async () => {
+  .description("Initialize ~/.ccmux/config.json (optionally bootstrap LiteLLM proxy in the same step)")
+  .option("--with-litellm", "Create/detect Python venv at ~/.claude/litellm-venv, install litellm[proxy], generate a minimal local config, point ccmux at it")
+  .option("--litellm-port <port>", "Port for the LiteLLM proxy (default 4101 — avoids the 3101 collision with Docker Desktop's autoclaw forward)", parseInt)
+  .option("-f, --force", "Re-create venv / overwrite litellm-config.yaml even when they already exist")
+  .action(async (opts: { withLitellm?: boolean; litellmPort?: number; force?: boolean }) => {
+    await initCommand(opts);
+  });
+
+program
+  .command("dashboard [subcommand]")
+  .description("Export sessions.json into the Obsidian Bases dashboard (subcommand: refresh)")
+  .option("-a, --all", "Export every session in sessions.json (default: last 7 days)")
+  .option("--data-path <path>", "Override vault data path (default: 05_OUTPUT/data/ccmux-sessions)")
+  .option("--local-only", "Skip the Obsidian REST API and force local fallback (testing)")
+  .action(async (subcommand: string | undefined, opts: { all?: boolean; dataPath?: string; localOnly?: boolean }) => {
     await initConfig();
-    console.log("ccmux initialized. Edit ~/.ccmux/config.json to add your projects.");
+    await dashboardCommand(subcommand, opts);
   });
 
 program.parse(process.argv);

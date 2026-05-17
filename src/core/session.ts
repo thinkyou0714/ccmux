@@ -2,8 +2,12 @@ import fs from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
 
-const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
-const SESSIONS_FILE = path.join(CCMUX_DIR, "sessions.json");
+function ccmuxDir(): string {
+  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
+}
+function sessionsFile(): string {
+  return path.join(ccmuxDir(), "sessions.json");
+}
 
 export type SessionStatus = "created" | "starting" | "idle" | "busy" | "done" | "closed" | "error" | "orphaned";
 
@@ -30,7 +34,7 @@ interface SessionsDB {
 
 async function readDB(): Promise<SessionsDB> {
   try {
-    const raw = await fs.readFile(SESSIONS_FILE, "utf-8");
+    const raw = await fs.readFile(sessionsFile(), "utf-8");
     return JSON.parse(raw) as SessionsDB;
   } catch {
     return { version: 1, sessions: [] };
@@ -38,10 +42,10 @@ async function readDB(): Promise<SessionsDB> {
 }
 
 async function writeDB(db: SessionsDB): Promise<void> {
-  await fs.mkdir(CCMUX_DIR, { recursive: true });
-  const tmp = `${SESSIONS_FILE}.tmp`;
+  await fs.mkdir(ccmuxDir(), { recursive: true });
+  const tmp = `${sessionsFile()}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(db, null, 2), { mode: 0o600 });
-  await fs.rename(tmp, SESSIONS_FILE);
+  await fs.rename(tmp, sessionsFile());
 }
 
 export async function createSession(
@@ -79,8 +83,16 @@ export async function getSession(nameOrId: string): Promise<Session | undefined>
   return db.sessions.find((s) => s.id === nameOrId || s.name === nameOrId);
 }
 
-export async function listSessions(): Promise<Session[]> {
+/**
+ * Default: omit `closed` sessions (the busy/idle dashboard view).
+ * Pass `includeClosed: true` to walk the full history (used by --all and by
+ * --status=closed in the list command).
+ */
+export async function listSessions(
+  opts: { includeClosed?: boolean } = {}
+): Promise<Session[]> {
   const db = await readDB();
+  if (opts.includeClosed) return db.sessions;
   return db.sessions.filter((s) => s.status !== "closed");
 }
 

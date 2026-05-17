@@ -38,7 +38,8 @@ program
   .description("List all active sessions")
   .option("-a, --all", "Include closed sessions")
   .option("-j, --json", "Output sessions as JSON")
-  .action(async (opts: { all?: boolean; json?: boolean }) => {
+  .option("--status <state>", "Filter by status (created|busy|done|closed|error|orphaned) — implies --all")
+  .action(async (opts: { all?: boolean; json?: boolean; status?: string }) => {
     await initConfig();
     await listCommand(opts);
   });
@@ -49,7 +50,8 @@ program
   .description("Close a session (worktree cleanup + Obsidian handoff)")
   .option("-f, --force", "Force close even with uncommitted changes")
   .option("--no-handoff", "Skip writing the handoff note")
-  .action(async (name: string, opts: { force?: boolean; noHandoff?: boolean }) => {
+  .option("--no-dashboard", "Skip the automatic Obsidian dashboard refresh (BL-7)")
+  .action(async (name: string, opts: { force?: boolean; noHandoff?: boolean; noDashboard?: boolean }) => {
     await initConfig();
     await closeCommand(name, opts);
   });

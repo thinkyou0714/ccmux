@@ -6,6 +6,7 @@ import { getTodayCost, formatCost } from "../core/cost.js";
 export interface ListOptions {
   all?: boolean;
   json?: boolean;
+  status?: string;
 }
 
 function statusColor(status: Session["status"]): string {
@@ -40,7 +41,13 @@ export async function listCommand(opts: ListOptions): Promise<void> {
   const pruned = await pruneOrphanedSessions();
 
   const cfg = await loadConfig();
-  const sessions = await listSessions();
+  // --status implies "look at every status (including closed)" so users can
+  // filter to `closed` for handoff browsing or `error/orphaned` for recovery.
+  const includeClosed = Boolean(opts.all || opts.status);
+  let sessions = await listSessions({ includeClosed });
+  if (opts.status) {
+    sessions = sessions.filter((s) => s.status === opts.status);
+  }
   const todayCost = await getTodayCost();
 
   if (opts.json) {

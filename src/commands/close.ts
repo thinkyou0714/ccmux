@@ -8,13 +8,15 @@ import { deleteWorktree, getWorktreeDiff } from "../core/worktree.js";
 import { closeTab } from "../core/zellij.js";
 import { releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
-import { writeObsidianHandoff } from "../integrations/obsidian.js";
+import { writeObsidianHandoff, exportSessionForDashboard } from "../integrations/obsidian.js";
+import { completeSession } from "../core/queue.js";
 
 const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
 
 export interface CloseOptions {
   force?: boolean;
   noHandoff?: boolean;
+  noDashboard?: boolean;
 }
 
 async function readClaudeMd(worktreePath: string): Promise<string | undefined> {
@@ -104,6 +106,45 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
 
     await updateSession(session.id, { status: "closed" });
     await releaseLock(name);
+
+    // BL-6: SQLite dedup queue — mark completed so the audit row reflects
+    // close even though the dedup key stays held (deliberate, audit trail).
+    try { completeSession(name); } catch { /* queue is opt-in, never block close */ }
+
+    // BL-7: auto dashboard refresh — write the per-session markdown that
+    // 05_OUTPUT/dashboards/ccmux-sessions.base reads. Silent + 3s timeout
+    // so Obsidian REST unavailability never blocks the close path.
+    if (cfg.obsidian.enabled && !opts.noDashboard) {
+      const rec = {
+        id: session.id,
+        name: session.name,
+        status: "closed" as const,
+        costUSD: session.costUSD,
+        branch: session.branch,
+        project: session.project,
+        llmBackend: session.llmBackend,
+        createdAt: session.createdAt,
+        updatedAt: new Date().toISOString(),
+        worktreePath: session.worktreePath,
+      };
+      const t0 = Date.now();
+      try {
+        await Promise.race([
+          exportSessionForDashboard(rec, {
+            baseUrl: cfg.obsidian.baseUrl,
+            apiKey: cfg.obsidian.apiKey,
+          }),
+          new Promise<never>((_, r) =>
+            setTimeout(() => r(new Error("dashboard export timeout")), 3000)
+          ),
+        ]);
+        if (Date.now() - t0 > 500) {
+          console.log(chalk.dim(`  dashboard refresh: ${Date.now() - t0}ms`));
+        }
+      } catch {
+        /* silent — auto dashboard is best-effort */
+      }
+    }
 
     const sym = cfg.cost.currency === "JPY" ? "¥" : "$";
     const cost =

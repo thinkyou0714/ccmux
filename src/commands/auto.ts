@@ -150,11 +150,15 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
           );
 
           const logHandle = await fs.open(logFile, "a");
+          // On Windows, claude is a .cmd shim — child_process.spawn must use
+          // shell:true to resolve and run .cmd/.bat through cmd.exe.
+          const useShell = process.platform === "win32";
           const child = spawn(bin, launchArgs, {
             cwd: wt.path,
             detached: true,
             stdio: ["ignore", logHandle.fd, logHandle.fd],
             env,
+            shell: useShell,
           });
           child.unref();
           await logHandle.close();

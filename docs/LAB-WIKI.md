@@ -50,6 +50,34 @@
 | **BL-1 HMAC-SHA256 Webhook署名検証** | `src/integrations/n8n.ts` `verifyGitHubSignature` + `n8n.webhookSecret` config + `n8n-workflows/github-issue-to-ccmux.json` HMAC node |
 | **BL-2 破壊的コマンドblocklist** | `src/core/hooks.ts` `writePreToolUseHook` — DROP TABLE / rm -rf / git push --force / cat .env 等。`CCMUX_BLOCKLIST_OVERRIDE=1` で一時解除 |
 | **BL-3 Stop hookサーキットブレーカー** | `src/core/hooks.ts` `writeStopHook` — 60s 窓 5 fires でトリップ / context_length_exceeded 等のパターン検出で即許可。`CCMUX_CIRCUIT_FIRES` / `CCMUX_CIRCUIT_WINDOW_SEC` で調整 |
+| **Windows daemon spawn fix** | `src/commands/auto.ts` — Windows では `claude` が `.cmd` shim のため `spawn(..., {shell: true})` で起動。Linux/macOS は従来通り |
+
+### Phase 0 検証ステータス (2026-05-17)
+
+実機検証結果 (Windows 11 / qwen2.5-coder:7b on CPU):
+
+| チェック | 結果 |
+|---|---|
+| Node.js >= 22 | ✅ v24.11.1 |
+| claude CLI | ✅ 2.1.143 |
+| Ollama 起動 + qwen2.5-coder:7b pull 済 | ✅ 4.7GB |
+| `~/.ccmux/config.json` 構造 valid | ✅ |
+| `ccmux auto` で worktree 作成 + TASK_STATE.md 書き出し | ✅ |
+| 3 hook (Stop/SessionStart/PreToolUse) install | ✅ |
+| `.claude/settings.json` overlay (deny rules 5 件) | ✅ |
+| daemon プロセスspawn | ✅ (上記 Windows fix 適用後) |
+| 実 LLM 呼び出し (claude → Ollama) | ⚠️ LiteLLM proxy 要セットアップ |
+
+**LLM 呼び出しに関する注意**: Claude CLI は Anthropic protocol (`/v1/messages`) を喋るが、Ollama は OpenAI 互換 (`/v1/chat/completions`) のみ。`ANTHROPIC_BASE_URL=http://localhost:11434` 直結では動かない。`litellm-config.example.yaml` 通り LiteLLM proxy 経由が必要:
+
+```bash
+pip install 'litellm[proxy]'
+litellm --config litellm-config.example.yaml --port 3101
+# その後、~/.ccmux/config.json の autoclaw.url を http://localhost:3101 に変更
+```
+
+**既知の小問題**:
+- `src/core/worktree.ts` の `WORKTREE_BASE` が `process.env.HOME` の hardcode で、`config.worktreeBase` を無視する。デフォルト `~/worktrees` で動作はするので blocker ではない。`CCMUX_WORKTREE_BASE` env 上書きは効く
 
 ### 未実装・MEDIUM優先度 🟡
 

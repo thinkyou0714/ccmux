@@ -43,13 +43,18 @@
 | bash/zsh補完 | `completions/` | `ccmux list --json`ベース |
 | CI | `.github/workflows/ci.yml` | build + test |
 
-### 未実装・HIGH優先度 🔴
+### 実装済み・HIGH優先度 ✅ (2026-05-17 land)
+
+| 機能 | ファイル |
+|---|---|
+| **BL-1 HMAC-SHA256 Webhook署名検証** | `src/integrations/n8n.ts` `verifyGitHubSignature` + `n8n.webhookSecret` config + `n8n-workflows/github-issue-to-ccmux.json` HMAC node |
+| **BL-2 破壊的コマンドblocklist** | `src/core/hooks.ts` `writePreToolUseHook` — DROP TABLE / rm -rf / git push --force / cat .env 等。`CCMUX_BLOCKLIST_OVERRIDE=1` で一時解除 |
+| **BL-3 Stop hookサーキットブレーカー** | `src/core/hooks.ts` `writeStopHook` — 60s 窓 5 fires でトリップ / context_length_exceeded 等のパターン検出で即許可。`CCMUX_CIRCUIT_FIRES` / `CCMUX_CIRCUIT_WINDOW_SEC` で調整 |
+
+### 未実装・MEDIUM優先度 🟡
 
 | 機能 | 理由 |
 |---|---|
-| **HMAC-SHA256 Webhook署名検証** | 現状セキュリティゼロ。外部からの偽装リクエストを受け入れる |
-| **破壊的コマンドblocklist** | `drizzle-kit push --force`, `DROP TABLE`, `rm -rf` をhookでブロック |
-| **Stop hookサーキットブレーカー** | Context full + Stop hook のデッドロックバグ対策 |
 | **ccusageコスト連携** | セッション終了時に`costUSD`をTASK_STATE.mdに記録 |
 | **SQLiteタスクキュー** | 複数セッション間の原子的タスク分配（amuxパターン） |
 
@@ -60,7 +65,7 @@
 ```
 GitHub Issue
     │
-    ▼ (Webhook + HMAC-SHA256検証 ← 未実装)
+    ▼ (Webhook + HMAC-SHA256検証 ← BL-1 実装済み 2026-05-17)
   n8n ワークフロー
     │
     ▼ POST /webhook/github

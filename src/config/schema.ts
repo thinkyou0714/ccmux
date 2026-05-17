@@ -22,6 +22,13 @@ export interface CcmuxConfig {
     webhookUrl: string;
     servePort: number;
     authToken?: string;
+    /**
+     * HMAC-SHA256 shared secret for GitHub-style webhook signing (BL-1).
+     * When set, /webhook/github requires a valid `X-Hub-Signature-256: sha256=<hex>`
+     * computed over the raw request body using this secret. Requests without a
+     * matching signature are rejected with 401.
+     */
+    webhookSecret?: string;
     tls?: { certFile: string; keyFile: string };
   };
   obsidian: {

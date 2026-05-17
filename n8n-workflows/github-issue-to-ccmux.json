@@ -38,10 +38,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const issue = $input.first().json.body.issue;\nconst sessionName = `issue-${issue.number}`;\nreturn [{ json: { sessionName, issueNumber: issue.number, issueTitle: issue.title, issueBody: issue.body || '' } }];"
+        "jsCode": "// BL-1: forward the *exact* bytes ccmux must verify. We re-serialize once\n// here and compute the HMAC over that same buffer, so the signature matches\n// what ccmux's verifyGitHubSignature recomputes on its raw body.\n//\n// Set the n8n credential 'CCMUX_WEBHOOK_SECRET' in Settings → Environment.\nconst crypto = require('crypto');\nconst issue = $input.first().json.body.issue;\nconst payload = JSON.stringify({\n  action: 'opened',\n  issue: {\n    number: issue.number,\n    title: issue.title,\n    body: issue.body || ''\n  }\n});\nconst secret = $env.CCMUX_WEBHOOK_SECRET || '';\nlet signature = '';\nif (secret) {\n  signature = 'sha256=' + crypto.createHmac('sha256', secret).update(payload).digest('hex');\n}\nreturn [{ json: { sessionName: `issue-${issue.number}`, payload, signature } }];"
       },
       "id": "set-session-params",
-      "name": "Build Session Params",
+      "name": "Build Payload + HMAC",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [680, 220]
@@ -54,13 +54,19 @@
         "headerParameters": {
           "parameters": [
             { "name": "X-GitHub-Event", "value": "issues" },
-            { "name": "Content-Type", "value": "application/json" }
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-Hub-Signature-256", "value": "={{ $json.signature }}" }
           ]
         },
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ action: 'opened', issue: { number: $json.issueNumber, title: $json.issueTitle, body: $json.issueBody } }) }}",
-        "options": {}
+        "specifyBody": "string",
+        "bodyParameters": {
+          "parameters": []
+        },
+        "body": "={{ $json.payload }}",
+        "options": {
+          "fullResponse": false
+        }
       },
       "id": "post-ccmux",
       "name": "POST to ccmux",
@@ -99,11 +105,11 @@
     },
     "IF issue opened": {
       "main": [
-        [{ "node": "Build Session Params", "type": "main", "index": 0 }],
+        [{ "node": "Build Payload + HMAC", "type": "main", "index": 0 }],
         [{ "node": "Respond Skip", "type": "main", "index": 0 }]
       ]
     },
-    "Build Session Params": {
+    "Build Payload + HMAC": {
       "main": [[{ "node": "POST to ccmux", "type": "main", "index": 0 }]]
     },
     "POST to ccmux": {
@@ -115,7 +121,7 @@
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "ccmux",
-    "notes": "GitHub webhook → n8n → ccmux serve /webhook/github → ccmux auto session\n\nSetup:\n1. In GitHub repo: Settings → Webhooks → Add webhook\n   Payload URL: https://<your-n8n>/webhook/github-issues\n   Content type: application/json\n   Events: Issues only\n2. In n8n: Import this workflow, set active=true\n3. Run: ccmux serve  (listens on :9090)\n\nOptional: Set n8n.authToken in ~/.ccmux/config.json and add\nAuthorization header to the HTTP Request node."
+    "notes": "GitHub webhook → n8n → ccmux serve /webhook/github → ccmux auto session\n\nSetup:\n1. In GitHub repo: Settings → Webhooks → Add webhook\n   Payload URL: https://<your-n8n>/webhook/github-issues\n   Content type: application/json\n   Events: Issues only\n2. In n8n: Import this workflow, set active=true.\n3. In n8n Settings → Environment, add CCMUX_WEBHOOK_SECRET=<shared secret>.\n4. In ~/.ccmux/config.json, set the same value as n8n.webhookSecret.\n5. Run: ccmux serve  (listens on :9090).\n\nBL-1 (security): The Build Payload + HMAC node signs the outbound body with\nCCMUX_WEBHOOK_SECRET and sends the digest as X-Hub-Signature-256. ccmux\nrejects requests with a missing or non-matching signature when its\nn8n.webhookSecret is set. Body must be sent verbatim — switching the HTTP\nRequest node to JSON-body mode would re-serialize and break the signature."
   },
   "id": "github-issue-to-ccmux",
   "tags": [{ "name": "ccmux" }]

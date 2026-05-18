@@ -66,7 +66,7 @@ program
 
 program
   .command("auto [name]")
-  .description("Auto-launch an autonomous CC session (--dangerously-skip-permissions)")
+  .description("Auto-launch an autonomous CC session")
   .option("--prompt <text>", "Initial prompt to send to CC after startup")
   .option("--prompt-file <path>", "Read initial prompt from a file (avoids shell injection)")
   .option("--resume <name>", "Resume from the latest handoff of a closed session")
@@ -74,7 +74,8 @@ program
   .option("--max-iter <n>", "Max iterations for --loop mode (default: 50)", parseInt)
   .option("--until <pattern>", "Completion signal pattern for --loop (default: CCMUX_COMPLETE)")
   .option("--sandbox", "Wrap session in bubblewrap OS sandbox (Linux only; requires bwrap)")
-  .action(async (name: string | undefined, opts: { prompt?: string; promptFile?: string; resume?: string; loop?: boolean; maxIter?: number; until?: string; sandbox?: boolean }) => {
+  .option("--unsafe-skip-permissions", "Pass --dangerously-skip-permissions to the inner claude CLI. Disables all permission prompts; required for fully-unattended loops but loses ccmux's last line of defense. (H-04)", false)
+  .action(async (name: string | undefined, opts: { prompt?: string; promptFile?: string; resume?: string; loop?: boolean; maxIter?: number; until?: string; sandbox?: boolean; unsafeSkipPermissions?: boolean }) => {
     await initConfig();
     if (opts.promptFile && !opts.prompt) {
       const { default: fs } = await import("fs/promises");

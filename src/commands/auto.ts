@@ -13,6 +13,7 @@ import { resolveClaudeCmd, buildClaudeEnv } from "../integrations/autoclaw.js";
 import { writeTaskState, taskStateClaudioPreamble } from "../core/taskstate.js";
 import { installSessionHooks } from "../core/hooks.js";
 import { runLoop } from "../core/loop-daemon.js";
+import { assertSessionName } from "../core/session-name.js";
 
 const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
 
@@ -28,6 +29,17 @@ export interface AutoOptions {
   maxIter?: number;
   until?: string;
   sandbox?: boolean;
+  /**
+   * H-04: pass --dangerously-skip-permissions to the inner claude CLI.
+   * Defaults to false; required for fully-unattended runs but removes
+   * claude's last permission gate. Opt-in via `--unsafe-skip-permissions`.
+   */
+  unsafeSkipPermissions?: boolean;
+}
+
+/** H-04 helper: returns ["--dangerously-skip-permissions"] or []. */
+function dangerFlag(opts: AutoOptions): string[] {
+  return opts.unsafeSkipPermissions ? ["--dangerously-skip-permissions"] : [];
 }
 
 export async function autoCommand(name?: string, opts: AutoOptions = {}): Promise<void> {
@@ -47,6 +59,9 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
   }
 
   const sessionName = name ?? autoName();
+  // H-01: validate at the boundary. autoName() produces a known-safe form
+  // (auto-HHMM), but a user-supplied `name` is untrusted.
+  assertSessionName(sessionName);
   const cfg = await loadConfig();
   const projectKey = cfg.defaultProject;
   const project = cfg.projects[projectKey];
@@ -98,7 +113,11 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
 
     if (muxType !== "none") {
       // Inside Zellij or tmux — open tab, then send prompt
-      const claudeCmd = `${baseClaudeCmd} --dangerously-skip-permissions`;
+      // H-04: only append --dangerously-skip-permissions when explicitly
+      // opted in. Without it the inner claude prompts for permission like
+      // a normal interactive session.
+      const dangerSuffix = opts.unsafeSkipPermissions ? " --dangerously-skip-permissions" : "";
+      const claudeCmd = `${baseClaudeCmd}${dangerSuffix}`;
       spinner.text = "Opening tab...";
       await openSession(sessionName, wt.path, claudeCmd);
       await updateSession(session.id, { status: "starting" });
@@ -137,6 +156,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
             maxIter: opts.maxIter ?? 50,
             until: opts.until ?? "CCMUX_COMPLETE",
             sandbox: opts.sandbox,
+            unsafeSkipPermissions: opts.unsafeSkipPermissions,
           });
           spinner.text = "Loop daemon spawned";
         } else {
@@ -145,7 +165,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
           await fs.writeFile(promptFile, opts.prompt, "utf-8");
 
           const { bin, args: launchArgs } = buildLaunchArgs(
-            ["--dangerously-skip-permissions", "-p", `@${promptFile}`],
+            [...dangerFlag(opts), "-p", `@${promptFile}`],
             wt.path,
             opts.sandbox
           );
@@ -176,8 +196,9 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
       } else {
         await updateSession(session.id, { status: "idle" });
         spinner.succeed(chalk.green(`"${sessionName}" worktree ready`));
+        const manualDangerSuffix = opts.unsafeSkipPermissions ? " --dangerously-skip-permissions" : "";
         console.log(
-          `\n  Start manually:\n  cd "${wt.path}" && ${baseClaudeCmd} --dangerously-skip-permissions\n`
+          `\n  Start manually:\n  cd "${wt.path}" && ${baseClaudeCmd}${manualDangerSuffix}\n`
         );
       }
     }
@@ -210,6 +231,8 @@ interface LoopDaemonOpts {
   maxIter: number;
   until: string;
   sandbox?: boolean;
+  /** H-04: pass through from AutoOptions. */
+  unsafeSkipPermissions?: boolean;
 }
 
 async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
@@ -221,8 +244,9 @@ async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
   const preamble = taskStateClaudioPreamble(sessionName);
   await fs.writeFile(promptFile, preamble + prompt, "utf-8");
 
+  const danger = opts.unsafeSkipPermissions ? ["--dangerously-skip-permissions"] : [];
   const { bin: claudeBin, args: claudeSandboxArgs } = buildLaunchArgs(
-    ["--dangerously-skip-permissions", "-p", `@${promptFile}`],
+    [...danger, "-p", `@${promptFile}`],
     worktreePath,
     opts.sandbox,
   );

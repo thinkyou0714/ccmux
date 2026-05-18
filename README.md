@@ -1,5 +1,9 @@
 # ccmux — Claude Code Multiplexer
 
+[![CodeQL](https://github.com/thinkyou0714/ccmux/actions/workflows/codeql.yml/badge.svg)](https://github.com/thinkyou0714/ccmux/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Star History Chart](https://api.star-history.com/svg?repos=thinkyou0714/ccmux&type=Date)](https://star-history.com/#thinkyou0714/ccmux&Date)
+
 Zellij × git worktree × Obsidian integration for managing parallel Claude Code sessions.
 
 ## Features

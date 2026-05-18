@@ -5,7 +5,9 @@ import path from "path";
 import { loadConfig } from "../config/schema.js";
 import { checkHealth } from "../integrations/autoclaw.js";
 
-const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
+function ccmuxDir(): string {
+  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
+}
 
 interface CheckResult {
   label: string;
@@ -70,7 +72,7 @@ async function checkCcusage(): Promise<CheckResult> {
 }
 
 async function checkConfig(): Promise<CheckResult> {
-  const configFile = path.join(CCMUX_DIR, "config.json");
+  const configFile = path.join(ccmuxDir(), "config.json");
   try {
     const raw = await fs.readFile(configFile, "utf-8");
     JSON.parse(raw);

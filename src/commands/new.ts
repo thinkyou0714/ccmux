@@ -6,6 +6,7 @@ import { createSession } from "../core/session.js";
 import { acquireLock, releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { resolveClaudeCmd } from "../integrations/autoclaw.js";
+import { assertSessionName } from "../core/session-name.js";
 
 export interface NewOptions {
   project?: string;
@@ -13,6 +14,8 @@ export interface NewOptions {
 }
 
 export async function newCommand(name: string, opts: NewOptions): Promise<void> {
+  // H-01: untrusted CLI / HTTP input — fail loud at the boundary.
+  assertSessionName(name);
   const cfg = await loadConfig();
   const projectKey = opts.project ?? cfg.defaultProject;
   const project = cfg.projects[projectKey];

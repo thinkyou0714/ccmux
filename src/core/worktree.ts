@@ -1,6 +1,7 @@
 import { execa } from "execa";
 import path from "path";
 import fs from "fs/promises";
+import { assertSessionName } from "./session-name.js";
 
 export interface WorktreeInfo {
   name: string;
@@ -34,6 +35,10 @@ export async function createWorktree(
   projectPath: string,
   options: CreateWorktreeOptions = {},
 ): Promise<WorktreeInfo> {
+  // H-01: defense-in-depth — newCommand/auto already assert this, but
+  // createWorktree is also called from /webhook/github via autoCommand and
+  // we want the validator to be the single source of truth for safety.
+  assertSessionName(name);
   const branch = `${BRANCH_PREFIX}/${name}`;
   const worktreeBase = resolveWorktreeBase(options.worktreeBase);
   const wtPath = path.join(worktreeBase, name);

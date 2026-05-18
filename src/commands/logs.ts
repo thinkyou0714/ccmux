@@ -5,7 +5,9 @@ import { execa } from "execa";
 import { loadConfig } from "../config/schema.js";
 import { getSession } from "../core/session.js";
 
-const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
+function ccmuxDir(): string {
+  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
+}
 
 export interface LogsOptions {
   follow?: boolean;
@@ -17,7 +19,7 @@ export interface LogsOptions {
 }
 
 async function getLogFile(name: string): Promise<string | null> {
-  const logDir = path.join(CCMUX_DIR, "logs");
+  const logDir = path.join(ccmuxDir(), "logs");
   const logFile = path.join(logDir, `${name}.log`);
   try {
     await fs.access(logFile);
@@ -28,7 +30,7 @@ async function getLogFile(name: string): Promise<string | null> {
 }
 
 async function listAllLogs(): Promise<void> {
-  const logDir = path.join(CCMUX_DIR, "logs");
+  const logDir = path.join(ccmuxDir(), "logs");
   let entries: import("fs").Dirent[];
   try {
     entries = await fs.readdir(logDir, { withFileTypes: true });
@@ -57,7 +59,7 @@ async function listAllLogs(): Promise<void> {
 async function cleanLogs(opts: { olderThan?: number; dryRun?: boolean }): Promise<void> {
   const cfg = await loadConfig();
   const maxAgeDays = opts.olderThan ?? cfg.logs.maxAgeDays;
-  const logDir = path.join(CCMUX_DIR, "logs");
+  const logDir = path.join(ccmuxDir(), "logs");
 
   let entries: import("fs").Dirent[];
   try {

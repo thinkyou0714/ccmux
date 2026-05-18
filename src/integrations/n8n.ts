@@ -39,11 +39,22 @@ function send(res: http.ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
-function checkAuth(req: http.IncomingMessage, authToken: string | undefined): boolean {
-  if (!authToken) return true;
+function checkAuth(req: http.IncomingMessage, authToken: string): boolean {
+  // H-03: authToken is required; callers must enforce its presence before
+  // reaching here. The previous `if (!authToken) return true` bypassed auth
+  // entirely when the config field was missing — startServer now refuses
+  // to start in that case (unless CCMUX_N8N_ALLOW_NOAUTH=1).
   const header = req.headers["authorization"];
   if (!header) return false;
-  return header === `Bearer ${authToken}`;
+  const expected = `Bearer ${authToken}`;
+  const a = Buffer.from(String(header));
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  try {
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -84,7 +95,7 @@ export function verifyGitHubSignature(
 async function handle(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  authToken: string | undefined,
+  authToken: string | null,
   webhookSecret: string | undefined,
 ): Promise<void> {
   const url = req.url ?? "/";
@@ -95,9 +106,10 @@ async function handle(
   }
 
   // /webhook/github uses HMAC signature instead of Bearer auth.
-  // All other endpoints require Bearer auth when authToken is set.
+  // All other endpoints require Bearer auth — unless explicit opt-out via
+  // CCMUX_N8N_ALLOW_NOAUTH (signaled by authToken === null).
   const isWebhook = method === "POST" && url === "/webhook/github";
-  if (!isWebhook && !checkAuth(req, authToken)) {
+  if (!isWebhook && authToken !== null && !checkAuth(req, authToken)) {
     return send(res, 401, { error: "Unauthorized" });
   }
 
@@ -195,12 +207,25 @@ async function handle(
 export async function startServer(): Promise<{ port: number; close: () => Promise<void>; https: boolean }> {
   const cfg = await loadConfig();
   const port = cfg.n8n.servePort ?? 9090;
-  const authToken = cfg.n8n.authToken;
+  const rawAuthToken = cfg.n8n.authToken;
   const webhookSecret = cfg.n8n.webhookSecret;
 
-  if (!authToken) {
-    console.warn("WARNING: n8n.authToken is not set. /session/* endpoints are unauthenticated.");
+  // H-03: refuse to start without authToken unless explicit override.
+  // The previous behaviour (warn + accept all callers) means any process
+  // on localhost could POST /session/new and trigger spawnLoopDaemon →
+  // claude with --dangerously-skip-permissions = full code-exec primitive.
+  let authToken: string | null;
+  if (rawAuthToken) {
+    authToken = rawAuthToken;
+  } else if (process.env.CCMUX_N8N_ALLOW_NOAUTH === "1") {
+    console.warn("WARNING: CCMUX_N8N_ALLOW_NOAUTH=1 — /session/* endpoints are unauthenticated. Do NOT use this in shared environments.");
+    authToken = null;
+  } else {
+    throw new Error(
+      "n8n.authToken is required. Set it in config or pass CCMUX_N8N_ALLOW_NOAUTH=1 for local-only development.",
+    );
   }
+
   if (!webhookSecret) {
     console.warn("WARNING: n8n.webhookSecret is not set. /webhook/github accepts unsigned payloads (BL-1).");
   }

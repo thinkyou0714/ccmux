@@ -27,15 +27,30 @@ export interface DailyCostSummary {
 let _cache: { data: CcusageJson; fetchedAt: number } | null = null;
 const CACHE_TTL_MS = 60_000;
 
+function resolveWindowsUsername(): string | undefined {
+  // H-05: derive Windows username at runtime instead of hardcoding "Rikuto".
+  // USERPROFILE (set by Windows) is the most reliable source even from WSL2
+  // when it's been exported across the boundary.
+  const fromProfile = process.env.USERPROFILE?.split(/[\\/]/).filter(Boolean).pop();
+  return (
+    fromProfile ??
+    process.env.WINDOWS_USERNAME ??
+    process.env.USERNAME ??
+    process.env.USER
+  );
+}
+
 function resolveClaudeConfigDir(): string | undefined {
   // WSL2: Claude Code data lives under the Windows user profile, not the WSL home.
-  const winUser = process.env.WINDOWS_USERNAME ?? process.env.USER ?? "Rikuto";
-  const candidate = `/mnt/c/Users/${winUser}/.claude`;
-  // Use it only when it looks like WSL2 (no Windows path separators in HOME)
-  if (process.env.HOME && !process.env.HOME.includes(":\\")) {
-    return process.env.CLAUDE_CONFIG_DIR ?? candidate;
-  }
-  return process.env.CLAUDE_CONFIG_DIR;
+  // Explicit override always wins.
+  if (process.env.CLAUDE_CONFIG_DIR) return process.env.CLAUDE_CONFIG_DIR;
+
+  // Only attempt the WSL2 path if HOME looks POSIX (no Windows drive separator).
+  if (!process.env.HOME || process.env.HOME.includes(":\\")) return undefined;
+
+  const winUser = resolveWindowsUsername();
+  if (!winUser) return undefined;
+  return `/mnt/c/Users/${winUser}/.claude`;
 }
 
 async function fetchCcusage(): Promise<CcusageJson | null> {

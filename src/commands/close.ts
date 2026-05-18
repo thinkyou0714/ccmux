@@ -11,7 +11,9 @@ import { loadConfig } from "../config/schema.js";
 import { writeObsidianHandoff, exportSessionForDashboard } from "../integrations/obsidian.js";
 import { completeSession } from "../core/queue.js";
 
-const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
+function ccmuxDir(): string {
+  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
+}
 
 export interface CloseOptions {
   force?: boolean;
@@ -161,7 +163,7 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
   }
 }
 
-async function writeLocalHandoff(data: {
+export async function writeLocalHandoff(data: {
   sessionName: string;
   branch: string;
   diff: string;
@@ -169,7 +171,7 @@ async function writeLocalHandoff(data: {
   todos?: string[];
   gitLog?: string;
 }): Promise<void> {
-  const dir = path.join(CCMUX_DIR, "handoffs");
+  const dir = path.join(ccmuxDir(), "handoffs");
   await fs.mkdir(dir, { recursive: true });
 
   const date = new Date().toISOString().slice(0, 10);

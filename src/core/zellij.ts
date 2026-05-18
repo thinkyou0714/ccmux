@@ -48,17 +48,27 @@ export async function sendToTab(name: string, prompt: string, delayMs = 3000): P
     }
     // Wait for CC to print its prompt
     await new Promise((r) => setTimeout(r, delayMs));
-    // Write the prompt
-    await execa(ZELLIJ_BIN, ["action", "write-chars", prompt + "\n"], { stdio: "pipe" });
+    // C-01: Strip non-tab/newline control chars before write-chars (zellij
+    // has no -l literal flag; control sequences could re-enter the terminal).
+    await execa(ZELLIJ_BIN, ["action", "write-chars", stripCtrl(prompt) + "\n"], { stdio: "pipe" });
     // Switch back to previous tab so Cursor user isn't jarred
     await execa(ZELLIJ_BIN, ["action", "go-to-previous-tab"], { stdio: "pipe" }).catch(() => {});
   } else if (mux === "tmux") {
     await new Promise((r) => setTimeout(r, delayMs));
+    // C-01: send-keys interprets `;`, `~`, key names. Use load-buffer +
+    // paste-buffer for arbitrary text (raw bytes, no interpretation), then
+    // send a separate Enter to submit.
+    const bufName = `ccmux-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await execa(TMUX_BIN, ["load-buffer", "-b", bufName, "-"], {
+      input: prompt,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     await execa(
       TMUX_BIN,
-      ["send-keys", "-t", tabName, prompt, "Enter"],
+      ["paste-buffer", "-d", "-p", "-b", bufName, "-t", tabName],
       { stdio: "pipe" }
     );
+    await execa(TMUX_BIN, ["send-keys", "-t", tabName, "Enter"], { stdio: "pipe" });
   }
   // If no mux: prompt was already echoed by openSession — nothing more to do
 }
@@ -66,7 +76,19 @@ export async function sendToTab(name: string, prompt: string, delayMs = 3000): P
 async function openZellijTab(name: string, command: string): Promise<void> {
   await execa(ZELLIJ_BIN, ["action", "new-tab", "--name", name], { stdio: "pipe" });
   await new Promise((r) => setTimeout(r, 300));
-  await execa(ZELLIJ_BIN, ["action", "write-chars", command + "\n"], { stdio: "pipe" });
+  // C-01: defense-in-depth — strip control chars before write-chars even
+  // though `command` is internally built (cwd + claudeCmd).
+  await execa(ZELLIJ_BIN, ["action", "write-chars", stripCtrl(command) + "\n"], { stdio: "pipe" });
+}
+
+/**
+ * C-01 helper: remove ASCII control bytes that could re-enter the receiving
+ * terminal as key sequences. Preserves TAB (0x09) and LF (0x0A) because they
+ * are legitimate in shell commands; strips NUL, BS, VT, FF, CR, ESC, DEL.
+ */
+function stripCtrl(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
 }
 
 async function openTmuxWindow(name: string, command: string): Promise<void> {

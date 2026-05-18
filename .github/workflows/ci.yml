@@ -32,3 +32,48 @@ jobs:
         # The integration suite spawns a stub HTTP server + drives ccmux auto.
         # Keep it separate so a flaky stub never masks unit failures.
         timeout-minutes: 5
+
+  security:
+    # Security gate: runs after `ci` matrix passes, on Linux only (single
+    # axis is enough; the audit / leak checks aren't platform-specific).
+    # Non-blocking signals (audit warnings) keep the warning category, but
+    # the secret-scan + dedicated regression tests are blocking.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks needs history for `protect` mode
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Security regression tests (C-01..H-06)
+        # Run the 8 dedicated regression files so a single failure surfaces
+        # clearly in the PR check list.
+        run: |
+          npm test -- --reporter=verbose \
+            tests/zellij-send-keys.test.ts \
+            tests/loop-daemon.test.ts \
+            tests/env-scrub.test.ts \
+            tests/session-name-validation.test.ts \
+            tests/n8n-auth.test.ts \
+            tests/auto-unsafe-flag.test.ts \
+            tests/obsidian-tls.test.ts \
+            tests/username-detection.test.ts
+
+      - name: npm audit (high severity, prod deps)
+        # `--production` skips devDependencies so a vitest CVE doesn't gate
+        # a runtime fix. Failing on `high` keeps the bar deliberate.
+        run: npm audit --omit=dev --audit-level=high
+        continue-on-error: true  # warning-only for now; flip to false once baseline is clean
+
+      - name: Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          config-path: .gitleaks.toml
+        env:
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"

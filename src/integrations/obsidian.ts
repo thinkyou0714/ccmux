@@ -40,6 +40,10 @@ async function obsidianRequest(
 
   return new Promise((resolve, reject) => {
     const lib = url.protocol === "https:" ? https : http;
+    // H-06: default to strict TLS. The Obsidian REST API plugin ships a
+    // self-signed cert; expose an explicit env opt-out for local-dev use
+    // rather than silently disabling cert validation for everyone.
+    const allowSelfSigned = process.env.CCMUX_OBSIDIAN_ALLOW_SELFSIGNED === "1";
     const req = lib.request(
       url,
       {
@@ -49,7 +53,7 @@ async function obsidianRequest(
           "Content-Type": "text/markdown",
           "Content-Length": body.length,
         },
-        rejectUnauthorized: false,
+        rejectUnauthorized: !allowSelfSigned,
       },
       (res) => {
         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {

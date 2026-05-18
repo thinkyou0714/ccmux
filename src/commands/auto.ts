@@ -12,6 +12,7 @@ import { loadConfig } from "../config/schema.js";
 import { resolveClaudeCmd, buildClaudeEnv } from "../integrations/autoclaw.js";
 import { writeTaskState, taskStateClaudioPreamble } from "../core/taskstate.js";
 import { installSessionHooks } from "../core/hooks.js";
+import { runLoop } from "../core/loop-daemon.js";
 
 const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
 
@@ -214,51 +215,29 @@ interface LoopDaemonOpts {
 async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
   const { worktreePath, logFile, env, maxIter, until, prompt, sessionName } = opts;
 
-  // Write prompt and loop script to worktree (no shell-injected values)
+  // Write prompt as a file the inner claude invocation reads via @path,
+  // not as a shell-quoted argument.
   const promptFile = path.join(worktreePath, "TASK_PROMPT.md");
   const preamble = taskStateClaudioPreamble(sessionName);
   await fs.writeFile(promptFile, preamble + prompt, "utf-8");
 
-  const loopScript = path.join(worktreePath, ".ccmux-loop.sh");
   const { bin: claudeBin, args: claudeSandboxArgs } = buildLaunchArgs(
     ["--dangerously-skip-permissions", "-p", `@${promptFile}`],
     worktreePath,
-    opts.sandbox
+    opts.sandbox,
   );
-  const claudeInvocation = [claudeBin, ...claudeSandboxArgs]
-    .map((a) => `"${a.replace(/"/g, '\\"')}"`)
-    .join(" ");
 
-  const scriptContent = [
-    `#!/usr/bin/env bash`,
-    `set -euo pipefail`,
-    `MAX_ITER="${maxIter}"`,
-    `UNTIL_PATTERN="${until.replace(/"/g, '\\"')}"`,
-    `LOGFILE="${logFile.replace(/"/g, '\\"')}"`,
-    `ITER=0`,
-    `while [ "$ITER" -lt "$MAX_ITER" ]; do`,
-    `  ITER=$((ITER + 1))`,
-    `  echo "=== ccmux loop iteration $ITER / $MAX_ITER ===" >> "$LOGFILE"`,
-    `  ${claudeInvocation} >> "$LOGFILE" 2>&1 || true`,
-    `  if grep -qF "$UNTIL_PATTERN" "$LOGFILE"; then`,
-    `    echo "=== CCMUX_LOOP_COMPLETE ===" >> "$LOGFILE"`,
-    `    exit 0`,
-    `  fi`,
-    `done`,
-    `echo "=== CCMUX_LOOP_MAX_ITER_REACHED ===" >> "$LOGFILE"`,
-  ].join("\n") + "\n";
-
-  await fs.writeFile(loopScript, scriptContent, { mode: 0o755 });
-
-  const logHandle = await fs.open(logFile, "a");
-  const child = spawn("bash", [loopScript], {
-    cwd: worktreePath,
-    detached: true,
-    stdio: ["ignore", logHandle.fd, logHandle.fd],
+  // C-02: drive the loop in a detached node worker (no bash heredoc).
+  // The worker spawns claude via argv-array — no shell interpretation of
+  // user-provided `until` or `logFile` is possible.
+  await runLoop({
+    maxIter,
+    untilPattern: until,
+    logFile,
+    claudeArgv: [claudeBin, ...claudeSandboxArgs],
     env,
+    cwd: worktreePath,
   });
-  child.unref();
-  await logHandle.close();
 }
 
 /**

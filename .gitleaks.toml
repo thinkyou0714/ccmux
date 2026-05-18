@@ -1,0 +1,58 @@
+# ccmux gitleaks config
+#
+# Phase 5 (this PR): provides a baseline secret-scan policy for the new CI
+# security gate. Catches the keys ccmux actually handles in addition to
+# upstream defaults.
+
+# Bring in gitleaks' default rule set (latest version at scan time).
+# We also add a few ccmux-specific rules below.
+[extend]
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Allowlist — exclude paths that intentionally contain example/test secrets.
+# ---------------------------------------------------------------------------
+[allowlist]
+description = "Paths exempt from secret scanning"
+paths = [
+  '''^node_modules/''',
+  '''^dist/''',
+  '''^\.claude/''',
+  '''^docs/long-running-tasks/''',  # spec writeups may quote example tokens
+  '''package-lock\.json$''',
+]
+# Tests contain a few placeholder secrets (e.g. "sk-ant-secret-do-not-leak")
+# whose whole point is to prove they DO NOT leak. Whitelist by stop word.
+stopwords = [
+  "do-not-leak",
+  "shh-its-a-secret",
+  "sk-ant-secret",
+  "AKIA-something",
+  "ghp_secret",
+  "ollama",          # the literal placeholder token for Ollama backend
+]
+
+# ---------------------------------------------------------------------------
+# ccmux-specific rules
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "obsidian-rest-api-key"
+description = "Obsidian REST API plugin key (hex, typically 64 chars)"
+regex = '''(?i)OBSIDIAN_API_KEY\s*[:=]\s*['"]?[a-f0-9]{32,128}['"]?'''
+keywords = ["OBSIDIAN_API_KEY"]
+tags = ["secret", "obsidian"]
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[a-zA-Z0-9_-]{32,}'''
+keywords = ["sk-ant-"]
+tags = ["secret", "anthropic"]
+
+[[rules]]
+id = "ccmux-bearer-in-config"
+description = "Bearer token literal in ccmux config files"
+regex = '''(?i)["'](Bearer\s+[A-Za-z0-9._-]{16,})["']'''
+keywords = ["Bearer "]
+path = '''ccmux\.json|config\.json|\.env'''
+tags = ["secret", "ccmux"]

@@ -1,5 +1,6 @@
 import http from "http";
 import { loadConfig, CcmuxConfig } from "../config/schema.js";
+import { scrubEnv } from "../core/env-scrub.js";
 
 export interface AutoclawHealth {
   available: boolean;
@@ -66,19 +67,22 @@ export function buildClaudeEnv(
   cfg: CcmuxConfig,
   sessionName?: string
 ): Record<string, string> {
-  const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-  if (sessionName) env["CCMUX_SESSION"] = sessionName;
+  // C-03 / H-02: scrubbed allowlist — do NOT inherit process.env wholesale.
+  // Secrets like ANTHROPIC_API_KEY / AWS tokens belong to ccmux's host
+  // process, not to spawned children.
+  const extra: Record<string, string> = {};
+  if (sessionName) extra["CCMUX_SESSION"] = sessionName;
 
   if (backend === "autoclaw") {
-    env["ANTHROPIC_BASE_URL"] = cfg.autoclaw.url;
+    extra["ANTHROPIC_BASE_URL"] = cfg.autoclaw.url;
     // When pointing directly at Ollama, the SDK requires a non-empty auth token.
     // "ollama" is the conventional placeholder.
     if (cfg.autoclaw.authToken) {
-      env["ANTHROPIC_AUTH_TOKEN"] = cfg.autoclaw.authToken;
+      extra["ANTHROPIC_AUTH_TOKEN"] = cfg.autoclaw.authToken;
     }
   }
 
-  return env;
+  return scrubEnv(extra);
 }
 
 /**

@@ -1,4 +1,5 @@
 import { execa } from "execa";
+import { scrubEnv } from "./env-scrub.js";
 
 interface DailyEntry {
   date: string;
@@ -42,10 +43,16 @@ async function fetchCcusage(): Promise<CcusageJson | null> {
     return _cache.data;
   }
   try {
-    const env: Record<string, string> = { ...process.env as Record<string, string> };
+    // C-03 / H-02: scrubbed allowlist instead of inheriting process.env.
+    const extra: Record<string, string> = {};
     const configDir = resolveClaudeConfigDir();
-    if (configDir) env["CLAUDE_CONFIG_DIR"] = configDir;
-    const { stdout } = await execa("npx", ["ccusage", "--json"], { stdio: "pipe", env });
+    if (configDir) extra["CLAUDE_CONFIG_DIR"] = configDir;
+    const env = scrubEnv(extra);
+    const { stdout } = await execa("npx", ["ccusage", "--json"], {
+      stdio: "pipe",
+      env,
+      extendEnv: false,
+    });
     const data = JSON.parse(stdout) as CcusageJson;
     _cache = { data, fetchedAt: Date.now() };
     return data;

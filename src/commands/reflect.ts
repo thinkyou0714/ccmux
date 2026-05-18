@@ -5,6 +5,7 @@ import path from "path";
 import { spawn } from "child_process";
 import { loadConfig } from "../config/schema.js";
 import { resolveClaudeCmd } from "../integrations/autoclaw.js";
+import { scrubEnv } from "../core/env-scrub.js";
 
 const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
 
@@ -156,8 +157,8 @@ function runClaudeReflect(
   autoclaUrl?: string
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-    if (autoclaUrl) env["ANTHROPIC_BASE_URL"] = autoclaUrl;
+    // C-03 / H-02: scrubbed allowlist instead of inheriting process.env.
+    const env = scrubEnv(autoclaUrl ? { ANTHROPIC_BASE_URL: autoclaUrl } : {});
 
     const args = [...prefixArgs, "--dangerously-skip-permissions", "-p", `@${promptFile}`];
     const child = spawn(bin, args, { env, stdio: ["ignore", "pipe", "pipe"] });

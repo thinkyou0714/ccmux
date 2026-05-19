@@ -19,6 +19,14 @@ export interface CreateWorktreeOptions {
   worktreeBase?: string;
 }
 
+export interface DeleteWorktreeOptions extends CreateWorktreeOptions {
+  /**
+   * Skip the pre-removal dirty worktree guard when true.
+   * `git worktree remove` is still invoked with `--force` either way.
+   */
+  force?: boolean;
+}
+
 const BRANCH_PREFIX = "ccmux";
 
 export function resolveWorktreeBase(override?: string): string {
@@ -120,27 +128,29 @@ export async function applyWorktreeInclude(
 export async function deleteWorktree(
   name: string,
   projectPath: string,
-  options: CreateWorktreeOptions = {},
+  options: DeleteWorktreeOptions = {},
 ): Promise<void> {
   const worktreeBase = resolveWorktreeBase(options.worktreeBase);
   const wtPath = path.join(worktreeBase, name);
   const branch = `${BRANCH_PREFIX}/${name}`;
 
-  // Check for uncommitted changes
-  try {
-    const { stdout } = await execa("git", ["-C", wtPath, "status", "--porcelain"], {
-      stdio: "pipe",
-    });
-    if (stdout.trim()) {
-      throw new Error(
-        `Worktree "${name}" has uncommitted changes. Commit or stash before closing.`
-      );
+  // Check for uncommitted changes unless the caller explicitly forces removal.
+  if (!options.force) {
+    try {
+      const { stdout } = await execa("git", ["-C", wtPath, "status", "--porcelain"], {
+        stdio: "pipe",
+      });
+      if (stdout.trim()) {
+        throw new Error(
+          `Worktree "${name}" has uncommitted changes. Commit or stash before closing.`
+        );
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("uncommitted")) throw err;
+      // Re-throw the uncommitted changes error
+      throw err;
     }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes("uncommitted")) throw err;
-    // Re-throw the uncommitted changes error
-    throw err;
   }
 
   await execa("git", ["-C", projectPath, "worktree", "remove", wtPath, "--force"], {

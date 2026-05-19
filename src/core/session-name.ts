@@ -49,10 +49,15 @@ export function validateSessionName(name: unknown): ValidationResult {
 /**
  * Throw on invalid name. Use at the boundary where untrusted input
  * (CLI arg, HTTP body field) becomes a session name.
+ *
+ * Codex review 2026-05-19: the offending name is JSON-stringified before
+ * inclusion in the error message so ANSI escapes / NUL / newlines from a
+ * malicious input cannot inject terminal control sequences into logs that
+ * surface this error.
  */
 export function assertSessionName(name: unknown): asserts name is string {
   const r = validateSessionName(name);
   if (!r.ok) {
-    throw new Error(`Invalid ccmux session name '${String(name)}': ${r.reason}`);
+    throw new Error(`Invalid ccmux session name ${JSON.stringify(String(name))}: ${r.reason}`);
   }
 }

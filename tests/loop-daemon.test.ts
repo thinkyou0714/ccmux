@@ -39,8 +39,26 @@ describe("C-02: loop-daemon worker", () => {
   it("untilPattern is matched as a literal substring, not a regex", async () => {
     // Load the source and confirm: .includes(untilPattern), no `new RegExp`.
     const src = await fs.readFile(workerPath, "utf-8");
-    expect(src).toContain(".includes(untilPattern)");
+    expect(src).toContain("includes(untilPattern)");
     expect(src).not.toContain("new RegExp(untilPattern");
+  });
+
+  it("rejects empty untilPattern (codex review 2026-05-19)", async () => {
+    const src = await fs.readFile(workerPath, "utf-8");
+    // runLoop entry: refuses empty pattern.
+    expect(src).toMatch(/untilPattern must be a non-empty string/);
+    // Worker fallback: rejects too.
+    expect(src).toMatch(/untilPattern must be non-empty/);
+  });
+
+  it("only scans newly-appended log bytes per iteration (codex review)", async () => {
+    const src = await fs.readFile(workerPath, "utf-8");
+    // We must NOT read the entire log content each iteration.
+    expect(src).not.toMatch(/readFile\(logFile,\s*"utf-8"\)/);
+    // We MUST track an offset and use partial read.
+    expect(src).toContain("iterStartOffset");
+    expect(src).toContain("baselineOffset");
+    expect(src).toMatch(/fh\.read\(/);
   });
 
   it("does NOT shell out to bash anywhere in the loop body", async () => {

@@ -83,6 +83,16 @@ describe("C-03/H-02: scrubEnv", () => {
     }
   });
 
+  it("allowlist does NOT include Node code-injection env vars (codex review)", () => {
+    // NODE_OPTIONS="--require /tmp/evil.js" gives the child a remote code
+    // execution primitive; NODE_PATH redirects module resolution;
+    // NPM_CONFIG_USERCONFIG points npm at an attacker-controlled .npmrc.
+    const allowed = new Set(_allowedKeysForTest());
+    for (const k of ["NODE_OPTIONS", "NODE_PATH", "NPM_CONFIG_USERCONFIG"]) {
+      expect(allowed.has(k), `${k} must not be in allowlist (RCE vector)`).toBe(false);
+    }
+  });
+
   it("does not include keys whose values are undefined in process.env", () => {
     setEnv("CCMUX_SESSION", undefined);
     const env = scrubEnv();

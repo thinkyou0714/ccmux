@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a problem with ccmux
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to file a report. Please fill in the details below.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: A clear description of the issue
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `ccmux ...`
+        2. ...
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: ccmux-version
+    attributes:
+      label: ccmux version
+      description: Output of `ccmux --version` or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS / tmux version / Claude Code version / Node version
+      placeholder: "macOS 14.5, tmux 3.4, Claude Code 1.0.x, Node 20.x"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant ccmux log output
+      render: shell

@@ -3,10 +3,8 @@ import https from "https";
 import crypto from "crypto";
 import fs from "fs/promises";
 import { loadConfig } from "../config/schema.js";
-import { newCommand } from "../commands/new.js";
-import { closeCommand } from "../commands/close.js";
 import { listSessions } from "../core/session.js";
-import { autoCommand } from "../commands/auto.js";
+import { autoSessionWorkflow, closeSessionWorkflow, createSessionWorkflow, SessionWorkflowError } from "../services/session-service.js";
 import { claimSession, releaseSession } from "../core/queue.js";
 
 type JsonBody = Record<string, unknown>;
@@ -115,8 +113,8 @@ async function handle(
 
       if (!name) return send(res, 400, { error: "name is required" });
 
-      await newCommand(name, { project, llm });
-      return send(res, 201, { ok: true, name });
+      const result = await createSessionWorkflow(name, { project, llm });
+      return send(res, 201, { ok: true, name, session: result.session, worktree: result.worktree });
     }
 
     if (method === "POST" && url === "/session/close") {
@@ -124,8 +122,8 @@ async function handle(
       const name = body.name as string | undefined;
       if (!name) return send(res, 400, { error: "name is required" });
 
-      await closeCommand(name, {});
-      return send(res, 200, { ok: true, name });
+      const result = await closeSessionWorkflow(name, {});
+      return send(res, 200, { ok: true, name, session: result.session, diff: result.diff });
     }
 
     if (isWebhook) {
@@ -174,7 +172,7 @@ async function handle(
       }
 
       try {
-        await autoCommand(sessionName, { prompt });
+        await autoSessionWorkflow(sessionName, { prompt });
       } catch (cmdErr: unknown) {
         // Auto failed before close — drop the queue row so a manual
         // re-trigger isn't permanently blocked by the dedup gate.
@@ -188,7 +186,8 @@ async function handle(
     send(res, 404, { error: "Not found" });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    send(res, 500, { error: message });
+    const status = err instanceof SessionWorkflowError ? err.statusCode : 500;
+    send(res, status, { error: message });
   }
 }
 
@@ -230,8 +229,11 @@ export async function startServer(): Promise<{ port: number; close: () => Promis
     server.once("error", reject);
   });
 
+  const address = server.address();
+  const actualPort = typeof address === "object" && address ? address.port : port;
+
   return {
-    port,
+    port: actualPort,
     https: isHttps,
     close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
   };

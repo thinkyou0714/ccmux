@@ -628,11 +628,186 @@ Claudeが迷走しはじめたら:
 
 ---
 
+## 10. 第4回 exa深堀調査（2026-05-19）— 根本原因 & ベストプラクティス監査
+
+> 監査時点の指摘（README/コード乖離、TLS bypass、TOCTOU lock、HMAC、worktree race など）を起点に、
+> 10テーマ×10クエリ = 100件のexa調査をサブエージェント並列で実施。
+> 各テーマで **TOP3 根本原因 + TOP5 ベストプラクティスギャップ** を抽出。
+
+### 10.1 TLS / Bearer / シークレット管理 (`integrations/`)
+
+**根本原因**
+1. **Bearer over HTTP** (`autoclaw.ts:1,28,112`, `n8n.ts:49` default) — RFC 6750 Bearer は TLS 前提。localhost も DNS rebinding 経路で攻撃可能。OWASP API2:2023。
+2. **`rejectUnauthorized: false`** (`obsidian.ts:52`) — "暗号化はされるが認証なし" の MITM 状態。Obsidian Local REST API 公式は自己署名証明書の trust を推奨。
+3. **TLS opt-in 設計** — Node 22 / 業界トレンドは "TLS デフォルト ON"。
+
+**ベストプラクティス対応**
+- `rejectUnauthorized: false` を削除し、`ca` オプション + SPKI ピンニング (or `NODE_EXTRA_CA_CERTS`)
+- `Authorization: Bearer` を `http://` で送る場合は `allowInsecure: true` の明示同意を必須に
+- トークン保管を OS keychain (`keytar` / `Bun.secrets` / `libsecret`) へ移行、env-var はフォールバック
+- すべての localhost エンドポイントに Host/Origin 検証 + 127.0.0.1 bind 必須
+- 静的 Bearer → 短命 token + 80% TTL でリフレッシュ (single-flight mutex)
+
+### 10.2 ファイルロック & TOCTOU (`core/lock.ts`, `core/session.ts`, `core/cost.ts`)
+
+**根本原因**
+1. **acquireLock の非アトミック復旧** (`lock.ts:15-41`) — `wx fail → readFile → kill(pid,0) → unlink → wx` の4 syscall race。CWE-367 symlink 攻撃 (`O_NOFOLLOW` なし)。
+2. **PID 生存判定が不十分** — `kill(pid,0)` は PID リサイクル後の別プロセスにヒット。py-filelock は startTime + bootId で対策済。
+3. **sessions.json に読み書きロックなし、fsync なし** — `temp+rename` だけでは crash で 0-byte ファイル化。`cost.ts` の `_cache` も mutex 無し。
+
+**ベストプラクティス対応**
+- `proper-lockfile` 採用（mkdir-based, mtime heartbeat, `onCompromised`, `signal-exit` 自動クリーンアップ）
+- `write-file-atomic` で fsync + parent dir fsync + same-dir tmp 保証
+- ロックファイルに `{pid, startTimeNs, bootId}` を保存し PID リサイクル耐性
+- `readDB → mutate → writeDB` を必ず writer lock 内で実行。長期的には better-sqlite3 + WAL に移行
+- `fetchCcusage()` を single-flight Promise でラップ
+- daemon 化するなら systemd `Type=notify` + `sd_notify("READY=1")` を採用 (PID file 不要)
+
+### 10.3 SQLite WAL & キュー (`core/queue.ts`)
+
+**根本原因**
+1. **`busy_timeout` が接続ごとにリセット** — 新接続で `PRAGMA busy_timeout=N` を再発行しないと SQLITE_BUSY を即発生。Windows の `LockFileEx` 粒度 (15ms) が EBUSY を増幅。
+2. **SELECT-then-UPDATE の claim レース** — fencing token (`attempts`) なしの release は stale worker が re-claim 済みジョブを削除可能。
+3. **PASSIVE 自動 checkpoint の枯渇** — 長い書き込み txn が writer lock を保持 → WAL が肥大 → Windows EBUSY。
+
+**ベストプラクティス対応**
+- 接続生成ヘルパーで `journal_mode=WAL`, `busy_timeout=5000-30000`, `synchronous=NORMAL`, `journal_size_limit` を必ず設定
+- claim を `BEGIN IMMEDIATE` + `UPDATE … WHERE id=(SELECT … LIMIT 1) RETURNING …` の単一文に
+- visibility timeout + dead-letter キュー（SQS スタイル）に移行、boolean lock 撤廃
+- 定期的に `PRAGMA wal_checkpoint(RESTART)` を実行、WAL サイズをメトリクス化
+- NFS/SMB パス検出で `CCMUX_QUEUE_DISABLED` を自動 ON
+
+### 10.4 git worktree 並行性 (`core/worktree.ts`)
+
+**根本原因**
+1. **`.git/worktrees/` の admin dir 作成 race** — 並列 `worktree add` で commondir 未書き込みのまま読まれる (git 2.53 でも再現)。
+2. **`--porcelain` フォーマットドリフト** — `locked`, `prunable` attr 追加で stanza-based parser が壊れる。inverted logic と相まって誤判定。
+3. **クラッシュ後の admin dir / branch リーク** — `gc.worktreePruneExpire` 既定3ヶ月。`fatal: 'X' is already checked out at ...` で branch 再利用不可。
+
+**ベストプラクティス対応**
+- 全 `worktree add|remove|prune` を `flock(2)` on `<repo>/.git/ccmux-worktree.lock` でシリアライズ
+- デフォルトを **detached HEAD worktree** に切り替え (parent HEAD 汚染防止、Codex/Container-Use 流儀)
+- worktree ベースを `<repo>/.ccmux/worktrees/<id>` に移動 (`.gitignore` 追加)
+- `extensions.worktreeConfig=true` で per-worktree `core.sparseCheckout` / submodule override を分離
+- 起動時に冪等な reconciler: `worktree list --porcelain -z` → prunable/missing 除去 → `git branch -D` → `prune --expire=now`
+
+### 10.5 HMAC Webhook (`integrations/n8n.ts`)
+
+**根本原因（既存実装は基本的に堅実）**
+1. **リプレイ防止なし** — `X-GitHub-Delivery` UUID を保存していない。捕獲した署名済みリクエストの再送が無制限。
+2. **タイムスタンプバインディングなし** — GitHub は body のみ署名。コールドリスタートで replay window が開く。
+3. **静的シークレット 1 個、ローテーション経路なし** — Stripe/Loop 流の dual-secret accept-list が無い。
+
+**ベストプラクティス対応**
+- `X-GitHub-Delivery` を 24h TTL LRU で dedupe、duplicate は 200 OK 返却で冪等化
+- `CCMUX_WEBHOOK_SECRETS`（CSV）で複数シークレット並行受け入れ → ゼロダウン rotation
+- `X-GitHub-Event` allowlist + payload schema 検証 (CVE-2026-21894 n8n Stripe verify bypass 教訓)
+- `sha256=` 接頭辞を非定数時間で先に検証 → 残り 32 bytes だけ `timingSafeEqual`
+- n8n 側は `$rawBody` で署名生成（`JSON.stringify($json)` は RFC 8785 非準拠で mismatch の原因）
+
+### 10.6 サンドボックス（`commands/auto.ts` bubblewrap）
+
+**根本原因**
+1. **AF_UNIX 経路が `--unshare-net` で塞がれない** — docker.sock, ssh-agent, gpg-agent, mitmproxy, 他 ccmux pane の tmux socket への lateral movement 可能。Anthropic sandbox-runtime は seccomp で `socket(AF_UNIX,…)` をブロック済み。
+2. **クレデンシャル漏洩経路** — `$HOME` を rw bind し `~/.ssh`, `~/.aws`, `~/.config/gh` を deny しなければ、プロンプトインジェクション 1 回で token 盗難 → 合法な `git push` で外部送出。
+3. **seccomp + capability + namespace 制御なし** — `unshare/clone3 CLONE_NEW*`, `ptrace`, `bpf`, `mount`, `keyctl`, `userfaultfd`, `io_uring_setup` 等の LPE primitive 未閉鎖。
+
+**ベストプラクティス対応**
+- mitmproxy / Squid sidecar で egress allowlist（`api.anthropic.com`, npm, github）。CONNECT bypass 禁止、169.254.169.254 ブロック
+- Landlock LSM (ABI v3+, WSL2 kernel 6.6+ 対応) を bwrap と二段構え
+- Anthropic 流 `apply-seccomp` を移植して AF_UNIX + namespace syscall を制限
+- tmpfs `$HOME` + `~/.claude` のみ rw bind、`~/.ssh ~/.aws ~/.gnupg ~/.config/gh ~/.kube ~/.docker /var/run/docker.sock` を deny
+- WSL2 検出 + Ubuntu 24.04 AppArmor プロファイル自動配置、WSL1 では起動拒否
+
+### 10.7 ターミナルマルチプレクサ (`core/zellij.ts`)
+
+**根本原因**
+1. **Zellij CLI の per-pane addressability 欠如** — `action write-chars` はフォーカス pane のみ。`new-pane` がフォーカスを奪う。tmux の `send-keys -t %3` 同等が存在しない。
+2. **IPC socket が `$XDG_RUNTIME_DIR` 依存** — SSH/iTerm/mobile クライアント間で session が見えなくなる。ログアウトで wipe。
+3. **stable pane id なし + env 非継承** — `kill-window` は pty に SIGHUP するだけ、子プロセスの実停止保証なし。
+
+**ベストプラクティス対応**
+- pane addressing は `zjctl` / `amux` パターン（WASM プラグイン or per-pane FIFO）を採用
+- `zellij action subscribe --format json` (NDJSON) + tmux `pipe-pane -o` でストリーミング観測性を確保
+- 長寿命エージェントは `systemd-run --user --scope` (or `setsid`) で multiplexer の cgroup から分離
+- `session_serialization true` + `pane_viewport_serialization true` + `--force-run-commands`
+- エラーを無音 swallow せず分類（socket-missing → degrade / pane-id-stale → resync / permission-denied → surface）
+
+### 10.8 TASK_STATE / Reflexion / コンテキスト圧縮 (`core/taskstate.ts`, `commands/reflect.ts`)
+
+**根本原因**
+1. **TASK_STATE.md が非構造化、`lastSummarizedMessageId` バージョンポインタなし** — compaction で silent drift、完了タスクの replay or 失敗の skip が発生。Sourcegraph Amp は compaction 自体を retired。
+2. **`reflect.ts` の CLAUDE.md 自動書き換えに regression gate なし** — HumanLayer 計測の ~150-200 命令 ceiling と Claude Code 既定 ~50 を考えると無制限追記で全 session 劣化。
+3. **Bash `echo > TASK_STATE.md`** — Write ツールの hooks/ログを bypass、非アトミック。並列 pane / subagent worktree で破損。
+
+**ベストプラクティス対応**
+- Anthropic `compact_20260112` beta + `pause_after_compaction: true` で TASK_STATE を verbatim 再挿入。trigger を context window の 70-75%
+- Reflexion 出力先を CLAUDE.md ではなく `.claude/skills/reflections/SKILL.md` に分離（procedure は Skill、fact は CLAUDE.md）
+- TASK_PROMPT.md を構造化 handoff artifact として実装（Intent / Phase / Completed / Remaining / Constraints / Failures、`task_id` 派生パス）
+- reflect 自動ルールは golden-prompt eval suite で P→F flip 閾値超過なら自動 revert (`ccmux reflect --revert <id>`)
+- CLAUDE.md は 60-300 行で cap、超過分は `@import` 化。memory item 30 個上限で剪定
+
+### 10.9 n8n → エージェント オーケストレーション (`n8n-workflows/github-issue-to-ccmux.json`)
+
+**根本原因**
+1. **GitHub と code-executing agent 間に認可レイヤなし** — `author_association` / org membership / label gate のチェックなし。public repo で誰でも prompt-injection-as-a-service。
+2. **冪等性なし** — `X-GitHub-Delivery` を捨てているので dedupe 不可。再配信 = 重複 session 起動。
+3. **同期 fan-out で backpressure なし** — N issue 同時オープン → N 並列 Claude session、課金直撃。
+
+**ベストプラクティス対応**
+- `cline/claude-issue-triage` 流の allowlist（OWNER/MEMBER/COLLABORATOR）+ label gate
+- HTTP Request ノードに idempotency key、3-state (processing/processed/failed) tracking
+- セッション起動時に `--max-turns`, `max_tokens`, USD ceiling を注入（ATXP 流 pre-funded balance）
+- `CLAUDE_CODE_ENABLE_TELEMETRY=1` OTLP + Error Trigger ノード → DLQ + Slack 通知
+- シークレットを `$env` ではなく n8n Credential 化、`N8N_ENV_FEAT_ENCRYPTION_KEY_ROTATION` 有効化
+- 長期的には Inngest / Trigger.dev v3 を実行層、n8n を intake 専用に役割分担
+
+### 10.10 ローカル LLM ルーティング (`integrations/autoclaw.ts`, `litellm-config.example.yaml`)
+
+**根本原因**
+1. **`ANTHROPIC_BASE_URL` 直叩き Ollama** — Claude Code は Anthropic Messages API のヘッダ/SSE に敏感。LiteLLM 経由でも 403/unknown errors 既報。
+2. **fallback chain が exception-only、未テスト** — 401/403/404 を 10 分リトライ後 cascade。bad response / latency breach では trigger しない。
+3. **キャンセル伝播なし** — `AbortSignal` 未接続。ユーザが turn を kill しても Ollama は完走を続け GPU を専有。
+
+**ベストプラクティス対応**
+- 既定 backend を **llama.cpp `llama-server`** (single user) または **vLLM** (並列) に変更、Ollama は prototyping 限定
+- `BudgetManager` + Redis で `max_budget`/`budget_duration`、provider 別 tokenizer 必須（`cl100k_base` 一律は誤計上）
+- `ANTHROPIC_AUTH_TOKEN` を既存 OAuth credential と共存させず、検出して拒否 + 警告
+- 名前ベース 1:1 alias を heuristic classifier に置き換え (token-count + tool-call presence → local、低信頼 → cloud escalate)
+- `ccmux doctor` で VRAM 要件 (`params*bpw + ctx*kv_per_token + 25%`) を事前検証、`OLLAMA_KEEP_ALIVE=30m`
+
+### 横断テーマ — まとめて見える地雷
+
+| カテゴリ | 共通パターン |
+|---|---|
+| **暗号化 opt-in** | TLS / HMAC ローテ / Bearer 経路、全部 opt-in。"デフォルトで安全" に統一すべし |
+| **冪等性の欠如** | webhook, queue claim, sessions.json mutate、全部 race or replay 経路あり。idempotency key 全層導入 |
+| **silent swallow** | lock 失敗 / zellij action / obsidian POST / autoclaw routeTask、エラー隠蔽が連鎖していて根本原因が追えない |
+| **非構造化 markdown 永続化** | TASK_STATE.md, CLAUDE.md, handoff note。構造化 (frontmatter + schema + version ID) しないと compaction で崩壊 |
+| **クレデンシャル平文** | config.json / env 文字列、OS keychain 未使用 |
+| **observability ゼロ** | OTLP / DLQ / cost-per-session の計測ハンドルなし。`reflect` の効果検証も不可能 |
+
+### 推奨 next actions（優先順）
+
+1. **P0**: `obsidian.ts:52` の `rejectUnauthorized: false` 削除 + CA pinning（即修正）
+2. **P0**: `prune.ts:47` deleteWorktree の `worktreeBase` 引数欠落（前回監査 Critical #1）
+3. **P1**: `proper-lockfile` 採用で `lock.ts` 全置換、`write-file-atomic` で session DB 保護
+4. **P1**: `X-GitHub-Delivery` dedupe + multi-secret 受け入れ
+5. **P2**: TASK_STATE を構造化 schema + `pause_after_compaction` 連携
+6. **P2**: bwrap に seccomp プロファイル追加、`$HOME` deny-list 整備
+7. **P3**: SQLite queue を visibility-timeout + DLQ に再設計
+8. **P3**: ローカル LLM デフォルトを llama-server / vLLM に切替、`AbortSignal` 配線
+
+詳細出典 URL は本 commit の audit メッセージもしくは `ccmux reflect --history` 参照。
+
+---
+
 ## 更新ログ
 
 | 日付 | 内容 |
 |---|---|
 | 2026-05-13 | 初版作成（3回のexa調査統合） |
+| 2026-05-19 | 第10章追加：第4回 exa深堀調査（10テーマ×10クエリ、根本原因+ベストプラクティス監査） |
 
 ---
 

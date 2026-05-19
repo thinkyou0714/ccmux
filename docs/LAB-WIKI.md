@@ -802,12 +802,188 @@ Claudeが迷走しはじめたら:
 
 ---
 
+## 11. 第5回 exa深堀調査（2026-05-19）— 直交テーマで再深掘り
+
+> 第4回と被らない10テーマ（hooks, subagent orchestration, observability, resilience,
+> CLI UX, testing, supply chain, cross-platform, commit safety, disaster recovery）に
+> 10クエリずつ exa 調査を並列実施。前回の表面的監査では見えなかった「業界では既に解決済みの
+> パターン」「Anthropic 自身の最新ガイダンス」「2026年の攻撃事例」を中心に抽出。
+
+### 11.1 Claude Code hooks 設計 (`core/hooks.ts`)
+
+**根本原因**
+1. **`~/.claude/settings.json` 自動書き換えが CVE-2026-21852 / GHSA-ph6w-f82w-28w6 の攻撃面を再現** — npm postinstall, Mini Shai-Hulud, Cozempic 型のドロッパに silent code execution 経路を開く。ユーザに hooks 追加の差分が見えない。
+2. **`bash → node` per invocation の性能アンチパターン** — macOS/Linux で 35-75ms、Git Bash で 200-500ms。5 hooks × 全 tool call で 300-500ms オーバーヘッド、Windows では 5 分ハングや "every-other-message" デッドロック既報。
+3. **`tool_input.command` regex blocklist はバイパス可能** — `cd dir && rm -rf …`, `|`, `;`, `&` チェーンを `^`-anchored matcher が通す。`permissionDecision:"allow"` 戻り値が native permission prompt を黙って無効化する仕様バグ (#28812)。
+
+**ベストプラクティス対応**
+- 設定書き換え前に diff + ユーザ同意、`ccmuxVersion` センチネル書き込みで idempotency 担保
+- blocklist は `re.split(r'\s*(?:&&|\|\||[;&|])\s*', cmd)` でサブコマンド分解、allow パスは無返答、deny は `exit 2`（JSON allow ではなく）
+- Stop hook ccusage は append-only JSONL + `flock` + `session_id` キー、ccusage 自身の JSONL を真実の源に
+- 単一カウンタの circuit breaker から Closed/Open/Half-Open ステートマシン + 進捗無しでの token 累積検出に
+- subshell を `bash --norc --noprofile` + `env -i` で起動、`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`、`ConfigChange` hook で settings 改ざん検知
+
+### 11.2 Subagent / マルチエージェント orchestration (worktree-per-pane モデル)
+
+**根本原因**
+1. **orchestrator 不在のピア fan-out** — Anthropic research-agent 流の hierarchical (orchestrator-worker) は CallSphere bench で flat swarm の約 40% コスト ($0.31 vs $0.74/task)。ccmux は flat なので kill criteria/retry/dedup を強制する場所がない。
+2. **handoff が暗黙 (commits + branch 名のみ)** — Amp Handoff / OpenAI Agents SDK `input_filter` が標準化した 5 要素 (Objective/Constraints/Prior decisions/Current state/Next steps) を運んでいない。次の pane が同じ失敗を繰り返す。
+3. **file-ownership contract なし** — 中規模 codebase では 5-10 pane で意味のある conflict 発生。AGENT_OWNERSHIP.md と pre-dispatch overlap scan (`clash` 流) が無いと last-writer-wins。
+
+**ベストプラクティス対応**
+- pane ごとに `~/.claude/projects/**/*.jsonl` をパースし `total_cost_usd` + cache-read を pane header に出す（`/cost` は subagent を 10倍 undercount, #43945/#46421/#48040）
+- heartbeat mtime + max-iteration counter + same-tool-call-loop detector で watchdog、`stop_reason ≠ end_turn` で alert
+- `.claude/settings.json` (local ではなく) を worktree 作成時にテンプレ展開、permission inherit hook をフォールバックに
+- JSONL を `parent_tool_use_id` でグルーピングした session timeline ビュー
+- `--container` モードで Dagger `cu stdio` MCP 経由のコンテナ隔離をオプション提供
+
+### 11.3 Observability / OpenTelemetry (`core/cost.ts`, `dashboard.ts`, `logs.ts`)
+
+**根本原因**
+1. **`CLAUDE_CODE_ENABLE_TELEMETRY=1` 未設定** — Claude Code 自身が gen_ai.* spans / token counter / tool-decision events を OTLP で吐けるのに、ccmux が child env に流していないので全部捨てている。
+2. **コスト計算が post-hoc 一発** — streaming token meter / per-tool-call attribution / per-worktree 集約 key / モデル価格レジストリ更新がない。Anthropic 値上げで即ドリフト。
+3. **`console.log` がログ基盤** — JSON/levels/request-id/redaction フォーマットなし。prompt 内容のリーク防御もゼロ。
+
+**ベストプラクティス対応**
+- worktree → session → tool-call で W3C `TRACEPARENT` を child env に注入（claude-agent-sdk-python PR #821 パターン、Claude CLI ≥ v2.1.110 必要）
+- gen_ai semantic conventions (`gen_ai.provider.name=anthropic`, `gen_ai.usage.input_tokens|output_tokens|cache_creation.input_tokens`, `gen_ai.conversation.id`) を保持
+- pino `redact` + デフォルトで `gen_ai.input.messages` をキャプチャせず、`OTEL_LOG_TOOL_DETAILS` で明示 opt-in
+- multi-window burn-rate アラート（Google SRE 流）: 3× rolling-7d token rate、no heartbeat > N min、error rate 2× baseline
+- `~/.ccmux/replay/{sessionId}.jsonl` に hash-only JSONL、`ccmux replay <session>` で regression diff
+
+### 11.4 Resilience patterns (retry / circuit breaker / bulkhead / timeout)
+
+**根本原因**
+1. **transient/permanent error 分類なし、リトライ層なし** — ECONNRESET / 503 / 429 一発で Ralph loop 中断。401/403/404/422 を retry しない原則も未実装。
+2. **timeout レイヤリング不完全 + Undici の罠** — Undici 既定 10s `connectTimeout` は `AbortSignal.timeout()` で上書き不可 (#4215)、event loop blocking で spurious fire (#3410)。connect/TLS/headers/body/total の分離なし。
+3. **child process の signal hygiene 不在** — `spawn` に `'error'`/`'spawn'` listener なし → ENOENT が uncaughtException 化。SIGTERM→drain→SIGKILL escalation なし、`detached:true` + 独自プロセスグループ + `signal-exit` なしでゾンビ蓄積。
+
+**ベストプラクティス対応**
+- **cockatiel** 採用 (Polly スタイル: retry+breaker+timeout+bulkhead+fallback が `wrap()` で合成、decorrelated-jitter デフォルト、AbortSignal フル対応)
+- 依存ごとに `circuitBreaker(handleAll, { halfOpenAfter: 30s, breaker: new ConsecutiveBreaker(5) })`
+- subprocess 起動に **`p-limit`** per dependency (claude=2, git=4, zellij=1) で bulkhead
+- POST に UUIDv4 `Idempotency-Key` ヘッダ、リトライで再利用。endpoint 非対応なら `retryable:false` マーク
+- CLI entry → integrations → child_process に single `AbortSignal` を `AsyncLocalStorage` で伝播、SIGTERM 時に `bulkhead.drain()` → `SIGKILL` フォールバック
+
+### 11.5 CLI / TUI UX (`commander` + `chalk` + `ora`)
+
+**根本原因**
+1. **TTY/CI 検出なしで ANSI が pipe/CI ログにリーク** — `process.stdout.isTTY`/`NO_COLOR`/`CI`/`TERM=dumb` 分岐なし、`FORCE_COLOR=truecolor` の precedence バグ既知。
+2. **`--json` がフラグであり契約ではない** — `schema_version` なし、envelope なし、`ccmux schema` introspection なし、stable key 保証なし。clispec.dev 原則 1-3 違反 → 完了補完と AI consumer が minor release で破壊。
+3. **interaction-mode 二分法なし** — 破壊的操作 (rm/prune) に確認なし、`--yes/-y` バイパスなし、TTY なしでの prompt フォールバックなし。
+
+**ベストプラクティス対応**
+- `supports-color` で `NO_COLOR`/`FORCE_COLOR`/`TERM=dumb` 正しく扱う。`useColor()` ヘルパで単一化、ora に `{isEnabled: process.stdout.isTTY && !process.env.CI}` 渡す
+- `--json` を `{schema_version:"1", data, error, warnings, meta}` envelope、JCS/RFC8785 key sort、`ccmux schema` で JSON Schema 返却、stdout/stderr 分離
+- spinner を X/Y progress に、redraw を ≤30Hz スロットル、非TTY時は `logger.info("Progress: 50/100")`、SIGINT/SIGTERM でカーソル復元
+- `gh`/`cargo` 流: 型付きエラーの cause chain ("could not X / Caused by: Y")、exit code 0/1/2/>2 ドキュメント化、Damerau-Levenshtein で "similar command: foo"
+- `--yes`/`-y` で `@clack/prompts` 確認、TTYなしは hard-fail、`DO_NOT_TRACK=1` クロスツール標準サポート
+
+### 11.6 Agentic システムのテスト戦略 (`tests/`)
+
+**根本原因**
+1. **real HTTP + real subprocess + real FS で全テスト一段化** — "ice-cream cone" anti-pattern。port collision、tmpdir worker race で Windows skip 連発。
+2. **mock-LLM 境界なし** — 共通 mock (llmock/llm-mock-server) や record/replay (vcr-llm/PollyJS) を使わず stub を都度書く → Anthropic wire format ドリフト、SSE 決定論なし。
+3. **parallel-safe seed 規律なし** — `VITEST_POOL_ID` 付き tmpdir 不採用、port 0 + read-back 未使用、time freeze なし、PRNG seed 制御なし。
+
+**ベストプラクティス対応**
+- PollyJS or 自作 JSONL recorder で `record once、playback in CI` の cassette パターン、API key を CI から除去
+- golden-prompt regression: 20-50 タスク (input → expected tool-call sequence / file-tree outcome)、PR ごとに走らせて LLM-as-judge + deterministic assertions
+- Lakera PINT / Meta CyberSecEval / PIArena を nightly でプロンプトインジェクション ASR 測定、regression gate
+- queue/lock 不変条件に fast-check `fc.scheduler()` で property-based: "concurrent enqueue でジョブ消失なし", "lock が任意 interleaving で mutual exclusion"
+- chaos: SIGKILL mid-stream, `truncate` ディスクフル, `tc netem` 遅延、`ink-visual-testing` で TUI PNG snapshot
+- Vitest native v8 provider (3.2.0+ で AST-remapped) に coverage 切替
+
+### 11.7 Supply chain security (`package.json`, `package-lock.json`)
+
+**根本原因**
+1. **postinstall 無制限実行** — `better-sqlite3` の `prebuild-install` postinstall hook を介して、TanStack (2026-04) / Axios (2026-03) 型攻撃で `.env` 全取り。`ignore-scripts` policy なし。
+2. **lockfile integrity gate なし** — `package-lock.json` commit済だが `lockfile-lint` なし、`.npmrc` で registry pinning なし、`npm audit signatures` で Sigstore provenance 検証なし。
+3. **`ANTHROPIC_API_KEY` を child Claude プロセスに env 継承** — 単一 transitive dep の postinstall malware で即漏洩。Anthropic は `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` を後追い導入済み。
+
+**ベストプラクティス対応**
+- `.npmrc` に `ignore-scripts=true`、better-sqlite3 は `npm rebuild --foreground-scripts` で明示 allowlist
+- `lockfile-lint --validate-https --validate-integrity --allowed-hosts npm` を preinstall、`npm sbom --sbom-format=cyclonedx` を Release attach
+- Dependabot weekly + 3-day `minimumReleaseAge` cooldown (50% の組織が release から 24h 以内に install するので Axios 級攻撃の 3h window を回避)
+- CodeQL default JS/TS + ossf/scorecard-action weekly、npm publish は trusted publishing (OIDC, npm ≥11.5.1)
+- 公開 CLI なので `npm-shrinkwrap.json` を ship、devDeps は `--save-exact` ピン
+
+### 11.8 クロスプラットフォーム (WSL2 / Windows / macOS / Linux)
+
+**根本原因**
+1. **POSIX 前提が core architecture に焼き付いている** — bubblewrap (Linux), bash hooks, Zellij (Win 未成熟), Unix signals。Win native では `SIGTERM` が SIGKILL 等価 (or Node 23.4 以前で ENOSYS)、graceful shutdown 不可。WSL2 でテストすると問題が隠蔽される。
+2. **path/FS 仮定が状態を silently 壊す** — `path.posix` vs `path.win32` 未分岐、`/mnt/c/...` リーク、case-sensitivity 差 (NTFS insensitive / ext4 sensitive / HFS+ NFD)、`fs.symlinkSync` が Admin/Developer Mode 必要。
+3. **CI matrix が docs の約束を強制してない** — Windows/macOS-arm64 lane なし、`better-sqlite3` が node-gyp フォールバックで Xcode/VS Build Tools 必要化を発見できない。
+
+**ベストプラクティス対応**
+- `sindresorhus/is-wsl` で WSL 検出 (`/proc/version` は Docker 偽陽性)、`wslpath`/`wsl-path` で path 変換
+- 取消プリミティブを signal から execa `gracefulCancel` + `AbortSignal` に、Windows は `taskkill /T` で tree-kill
+- 単一 path helper で `path.posix` serialize / `fs.realpath` canonical / NFC 正規化 / 240char 超は `\\?\` prefix
+- chokidar v4 で inotify/FSEvents/ReadDirectoryChangesW 差吸収、WSL `/mnt/*` は `usePolling:true`
+- bubblewrap を sandbox 抽象化 (bwrap on Linux, sandbox-exec on macOS, Job Objects/AppContainer or no-op on Win)、`process.platform` ではなく capability check
+
+### 11.9 git commit safety for autonomous agents (`commands/auto.ts`, `merge.ts`)
+
+**根本原因**
+1. **プロセスレベルで git hygiene を強制してない** — CLAUDE.md "`--no-verify` 使うな" は agent がプレッシャー下で無視する (#40117)。`mcp__github__push_files` / `merge_pull_request` は GitHub API 経由で local hooks を完全バイパス。
+2. **agent commit に cryptographic identity なし** — GPG/SSH 署名なし、専用 bot account なし、署名鍵ローテ playbook なし。`Require signed commits` branch protection を満たせない、フォレンジック錨なし。
+3. **auto-merge 経路 (`gh pr create` → merge) が governance を skip** — 同一 bot identity が作成と merge、required reviewers/required status checks/CODEOWNERS gate/secret scanning push protection なし。GitHub auto-merge race (enable 後 re-review 前に新コミット) と相まって unsafe。
+
+**ベストプラクティス対応**
+- `block-no-verify` を `PreToolUse` hook で hard block、`mcp__github__(push_files|create_or_update_file|merge_pull_request|delete_file|update_pull_request_branch)` も合わせて match、`exit 2` で deny
+- ed25519 SSH 署名鍵を ccmux インスタンスごとに生成、`gpg.format=ssh`, `commit.gpgsign=true`、専用 `ccmux-bot` GitHub アカウントに登録、repo ruleset で `required_signatures` + 空 `bypass_actors`
+- gitleaks + trufflehog を pre-commit & pre-push (lefthook で並列)、GitHub secret scanning push protection をサーバ側で有効化、`trufflehog --results=verified --fail`
+- `prepare-commit-msg` hook で trailer 注入: `Agent-Session:<id>`, `Model:claude-opus-4-7`, `Task-Reference:<PR>`, `Cost-USD:<n>`, `Tokens-In/Out:<n>`
+- `main` に repo ruleset: PR + 1 human approval, signed commits, linear history, dismiss stale approvals on new commits、`gh pr merge --auto` 禁止
+
+### 11.10 Disaster recovery — crash / OOM / disk full / lost loop (`commands/auto.ts`, `core/queue.ts`)
+
+**根本原因**
+1. **durable execution substrate 不在** — Ralph loop の state が `sessions.json` / `queue.sqlite` / worktrees / bash-hook node に散在。append-only event log なし、`thread_id`-keyed checkpoint なし、idempotency key なし。crash 中の in-flight tool call が全消失、replay で重複 side effect (double commit, double 課金) リスク。
+2. **liveness ≠ progress、ccmux はどちらも測ってない** — Repeater/Wanderer/Looper の AI 固有失敗モード (Hermes cache-loop #15654, Zylos) を `(progress_metric, recent_actions_deque, last_advance_ts)` で外部 supervisor が判別不能。
+3. **state が脆く保護されてない** — `queue.sqlite` WAL モード未文書化、`PRAGMA integrity_check` boot check なし、`.recover` runbook なし。`~/.ccmux/` バックアップなし。ENOSPC で hook と parent loop 両死、SQLite WAL mid-frame 残し。
+
+**ベストプラクティス対応**
+- LangGraph 流 super-step checkpointing: 各 Ralph iteration 後に `{intent, tool_results, partial_diff_path, last_commit_sha, iteration_n}` を atomic 書き込み、起動時に git log + status から resume
+- gateway 強制 quota: LiteLLM `max_iterations` + `max_budget_per_session`、per-session 200K-500K token cap、per-day $ cap、per-repo write-rate、"10% finalization budget" 予約
+- `setInterval` heartbeat で `last_beat_ts` + `progress_hash` (git tree hash)、supervisor が unchanged > N min で kill。`fs.statfs` で `bavail < 1GB` 検出 → loop pause (crash ではなく)。`NODE_OPTIONS=--max-old-space-size=$(75% of cgroup memory.max)`、exit 137 trap
+- `restic` (クラウド優先, dedup, AES-256) で `~/.ccmux/` nightly snapshot、SQLite は `.backup` + `-wal`/`-shm` 同時、compaction 直前に hourly
+- 単一 `gracefulShutdown(reason)` を SIGTERM/SIGINT/`uncaughtException` にバインド、idempotent flag, `setTimeout(force_exit, 10_000).unref()`, 逆依存順 (新 prompt 停止 → in-flight drain → SQLite close → detached pgid kill)
+- `ccmux postmortem <session>` で transcripts から decisions/insights/failures 抽出 (OpenExp/agent-xray パターン)
+
+### 横断テーマ — 第5回で見えた地雷
+
+| カテゴリ | 共通パターン |
+|---|---|
+| **Anthropic 自身が後追い対策済の脆弱性に未対応** | `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, `apply-seccomp`, settings.json 自動書き換え保護、`CLAUDE_CODE_ENABLE_TELEMETRY=1` ーー Anthropic が既に出したガードレールを ccmux が活用してない |
+| **プロンプトレベルの強制 vs プロセスレベルの強制** | CLAUDE.md ルール ≠ guardrail。`--no-verify` 禁止、blocklist、cost cap は全部 hook + ruleset で hard enforce すべし |
+| **agent failure mode を観測する語彙の欠如** | Repeater / Wanderer / Looper / stuck / progress-without-output — メトリクス化されてないので supervisor が判別不能 |
+| **業界が既に解決済の問題を再発明** | cockatiel / proper-lockfile / p-limit / cycloneDX / chokidar v4 / restic etc. NIH ではなく採用判断を |
+| **CI matrix が約束未保証** | Windows/macOS arm64 lane 不在、property-based test 不在、chaos test 不在 — README が守られない |
+| **handoff / observability / cost を独立データ層として扱ってない** | 全部 markdown or console に紛れ込んでいる。JSONL + JSON schema + trace ID で構造化が prereq |
+
+### 第5回 next actions（優先順、第4回の P0-P3 と独立）
+
+1. **P0 (即修正)**: `block-no-verify` PreToolUse hook、`mcp__github__*` API バイパス match 含む。設定書き換え bypass の即時封じ込め
+2. **P0**: `CLAUDE_CODE_ENABLE_TELEMETRY=1` を child env に伝播、JSONL replay capture
+3. **P1**: `cockatiel` で全 HTTP integration を retry+breaker+timeout+bulkhead 化、`AbortSignal` 配線
+4. **P1**: `.npmrc` `ignore-scripts=true` + `lockfile-lint` preinstall、Dependabot cooldown 3 日
+5. **P2**: `restic` snapshot 自動化、SQLite `.backup` + heartbeat watchdog
+6. **P2**: `--json` envelope (`schema_version`) と `ccmux schema` 導入、TTY/CI 検出
+7. **P3**: ed25519 SSH 署名鍵 + repo ruleset、`prepare-commit-msg` trailer 注入
+8. **P3**: Windows/macOS-arm64 CI lane、PollyJS cassette、fast-check property-based
+
+詳細出典 URL は本 commit の audit 記録参照。
+
+---
+
 ## 更新ログ
 
 | 日付 | 内容 |
 |---|---|
 | 2026-05-13 | 初版作成（3回のexa調査統合） |
 | 2026-05-19 | 第10章追加：第4回 exa深堀調査（10テーマ×10クエリ、根本原因+ベストプラクティス監査） |
+| 2026-05-19 | 第11章追加：第5回 exa深堀調査（直交10テーマ×10クエリ、hooks/orchestration/observability/resilience/UX/test/supply-chain/cross-platform/commit-safety/DR） |
 
 ---
 

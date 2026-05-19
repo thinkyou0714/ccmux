@@ -1,0 +1,25 @@
+title: "[Show and Tell] "
+labels: ["show-and-tell"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share what you built with ccmux. Workflow tips, custom configs, screenshots all welcome.
+  - type: textarea
+    id: what
+    attributes:
+      label: What are you showing?
+      description: A short description of your setup or workflow
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config snippets
+      description: ccmux config, tmux config, claude settings — paste only what is interesting
+      render: yaml
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or recordings
+      description: Drag and drop images or paste links

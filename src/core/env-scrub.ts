@@ -34,10 +34,6 @@ const ALLOWED_KEYS: ReadonlyArray<string> = [
   "TMUX",
   "ZELLIJ",
   "ZELLIJ_SESSION_NAME",
-  // Node-specific
-  "NODE_OPTIONS",
-  "NODE_PATH",
-  "NPM_CONFIG_USERCONFIG",
   // Windows essentials (cmd.exe shim resolution, %TEMP%, etc.)
   "USERPROFILE",
   "USERNAME",
@@ -55,6 +51,11 @@ const ALLOWED_KEYS: ReadonlyArray<string> = [
   "CCMUX_PROJECT",
   "CCMUX_WORKTREE_BASE",
   "CLAUDE_CONFIG_DIR",
+  // NOTE (codex review 2026-05-19): NODE_OPTIONS / NODE_PATH /
+  // NPM_CONFIG_USERCONFIG are deliberately EXCLUDED. They give the child a
+  // remote-code-execution primitive (e.g. NODE_OPTIONS="--require /tmp/evil.js")
+  // when an attacker can influence the parent environment. If a legitimate
+  // need arises (e.g. CI), pass the exact value via `extra` after validation.
 ];
 
 /**

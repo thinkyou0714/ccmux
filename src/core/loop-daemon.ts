@@ -24,6 +24,12 @@ export interface RunLoopOpts {
  * Parent returns immediately after spawning the detached worker.
  */
 export async function runLoop(opts: RunLoopOpts): Promise<void> {
+  // Codex review 2026-05-19: refuse empty untilPattern. .includes("") is
+  // always true, which would short-circuit the loop after iteration 1.
+  if (typeof opts.untilPattern !== "string" || opts.untilPattern.length === 0) {
+    throw new Error("runLoop: untilPattern must be a non-empty string");
+  }
+
   const logHandle = await fs.open(opts.logFile, "a");
 
   // claudeArgv is small (a binary path + a handful of flags + @promptFile);
@@ -51,6 +57,13 @@ async function workerMain(): Promise<void> {
     console.error("[ccmux loop worker] missing --worker flag");
     process.exit(2);
   }
+  // Codex review 2026-05-19: empty pattern guard at the worker too.
+  // runLoop() already refuses, but if anyone hand-spawns the worker the
+  // guard prevents the same .includes("") infinite-completion bug.
+  if (typeof untilPattern !== "string" || untilPattern.length === 0) {
+    console.error("[ccmux loop worker] untilPattern must be non-empty");
+    process.exit(2);
+  }
 
   const maxIter = parseInt(maxIterStr, 10);
   if (!Number.isFinite(maxIter) || maxIter <= 0) {
@@ -72,7 +85,21 @@ async function workerMain(): Promise<void> {
 
   const append = (msg: string): Promise<void> => fs.appendFile(logFile, msg + "\n", "utf-8");
 
+  // Codex review 2026-05-19: only inspect log content WRITTEN BY THIS WORKER.
+  // The original `readFile(logFile)` scanned the entire log every iteration,
+  // so any past iteration's user prompt or claude output that happened to
+  // contain the completion sentinel would short-circuit the loop.
+  // Anchor at the byte offset where this run started; per iteration, only
+  // examine content added since the previous iteration's check.
+  let baselineOffset = 0;
+  try {
+    baselineOffset = (await fs.stat(logFile)).size;
+  } catch {
+    baselineOffset = 0;
+  }
+
   for (let i = 1; i <= maxIter; i++) {
+    const iterStartOffset = baselineOffset;
     await append(`=== ccmux loop iteration ${i} / ${maxIter} ===`);
 
     await new Promise<void>((resolve) => {
@@ -89,10 +116,24 @@ async function workerMain(): Promise<void> {
       });
     });
 
-    // Read log and check for completion as a *literal substring* (no regex).
+    // Read only what was added during this iteration. Use a handle + read
+    // to avoid loading the whole log into memory on long runs.
     try {
-      const logContent = await fs.readFile(logFile, "utf-8");
-      if (logContent.includes(untilPattern)) {
+      const stat = await fs.stat(logFile);
+      const newBytes = Math.max(0, stat.size - iterStartOffset);
+      let iterContent = "";
+      if (newBytes > 0) {
+        const fh = await fs.open(logFile, "r");
+        try {
+          const buf = Buffer.alloc(newBytes);
+          await fh.read(buf, 0, newBytes, iterStartOffset);
+          iterContent = buf.toString("utf-8");
+        } finally {
+          await fh.close();
+        }
+      }
+      baselineOffset = stat.size;
+      if (iterContent.includes(untilPattern)) {
         await append("=== CCMUX_LOOP_COMPLETE ===");
         return;
       }

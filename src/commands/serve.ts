@@ -2,7 +2,7 @@ import chalk from "chalk";
 import { startServer } from "../integrations/n8n.js";
 
 export async function serveCommand(opts: { port?: number }): Promise<void> {
-  const { port, close, https: isHttps } = await startServer();
+  const { port, close, https: isHttps } = await startServer(opts.port);
   const scheme = isHttps ? "https" : "http";
 
   console.log(

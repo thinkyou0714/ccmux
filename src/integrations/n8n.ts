@@ -192,9 +192,9 @@ async function handle(
   }
 }
 
-export async function startServer(): Promise<{ port: number; close: () => Promise<void>; https: boolean }> {
+export async function startServer(portOverride?: number): Promise<{ port: number; close: () => Promise<void>; https: boolean }> {
   const cfg = await loadConfig();
-  const port = cfg.n8n.servePort ?? 9090;
+  const port = portOverride ?? cfg.n8n.servePort ?? 9090;
   const authToken = cfg.n8n.authToken;
   const webhookSecret = cfg.n8n.webhookSecret;
 

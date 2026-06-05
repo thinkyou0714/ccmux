@@ -1,6 +1,5 @@
 import chalk from "chalk";
 import ora from "ora";
-import { execa } from "execa";
 import { spawn } from "child_process";
 import fs from "fs/promises";
 import path from "path";

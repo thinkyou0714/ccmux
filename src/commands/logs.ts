@@ -70,10 +70,9 @@ async function cleanLogs(opts: { olderThan?: number; dryRun?: boolean }): Promis
   }
 
   const now = Date.now();
-  const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
   const files = entries.filter((e) => e.isFile() && e.name.endsWith(".log"));
 
-  let toDelete: string[] = [];
+  const toDelete: string[] = [];
   for (const f of files) {
     const filePath = path.join(logDir, f.name);
     const stat = await fs.stat(filePath);

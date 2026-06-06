@@ -71,7 +71,10 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
 
     spinner.text = "Removing worktree...";
     try {
-      await deleteWorktree(name, session.projectPath, { worktreeBase: cfg.worktreeBase });
+      await deleteWorktree(name, session.projectPath, {
+        worktreeBase: cfg.worktreeBase,
+        force: opts.force,
+      });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("uncommitted") && !opts.force) {

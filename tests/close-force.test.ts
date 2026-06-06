@@ -58,8 +58,12 @@ beforeEach(async () => {
 
 afterEach(async () => {
   process.env = { ...origEnv };
-  // Retry on Windows where git may still hold handles on the temp repo (EBUSY).
-  await fs.rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  // Best-effort temp cleanup. On Windows git can keep a handle on the temp repo,
+  // so cap teardown time and swallow errors — it must never hang or fail the suite.
+  await Promise.race([
+    fs.rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {}),
+    new Promise((resolve) => setTimeout(resolve, 5000)),
+  ]);
 });
 
 describe("closeCommand --force", () => {

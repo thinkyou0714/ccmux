@@ -1,11 +1,16 @@
-# LiteLLM proxy config for ccmux — hybrid local + cloud routing
+# LiteLLM proxy config for ccmux — hybrid local + cloud routing (EXAMPLE / template).
+#
+# NOTE: the canonical SSOT now lives in claude-lab-config:
+#       ~/.claude/config/litellm/litellm-config.yaml
+#       start_litellm_proxy.ps1 (Resolve-Config) prefers that path; this example is the
+#       LAST-RESORT fallback. Edit the SSOT, not this file, for real changes.
 #
 # Usage:
 #   pip install litellm[proxy]
-#   litellm --config litellm-config.example.yaml --port 3101
+#   litellm --config litellm-config.example.yaml --port 4101   # LAB uses 4101 (3101 collides with Docker Desktop)
 #
 # Then set in ~/.ccmux/config.json:
-#   "autoclaw": { "url": "http://localhost:3101", "model": "claude-opus-4-7" }
+#   "autoclaw": { "url": "http://localhost:4101", "model": "claude-sonnet-4-6" }
 #
 # Models declared here map Claude model names to local or cloud backends.
 # LiteLLM routes the request based on the model name in each API call.
@@ -13,13 +18,14 @@
 # you want as the primary.
 
 model_list:
-  # Primary: local Ollama (free, no API key)
-  # Requires: OLLAMA_CONTEXT_LENGTH=131072 ollama serve && ollama pull qwen3-coder
+  # Opus-tier: heavy reasoning. CPU-only rigs (no ROCm/CUDA, e.g. AMD Radeon iGPU) CANNOT run
+  # qwen3-coder (needs >=24GB) — map to an installed CPU-appropriate 14B instead.
+  # Requires: OLLAMA_CONTEXT_LENGTH=65536 ollama serve && ollama pull qwen2.5:14b-instruct-q4_K_M
   - model_name: claude-opus-4-7
     litellm_params:
-      model: ollama/qwen3-coder
+      model: ollama/qwen2.5:14b-instruct-q4_K_M
       api_base: http://localhost:11434
-      timeout: 600  # long tasks can take minutes per response
+      timeout: 600  # long tasks can take minutes per response on CPU
 
   # Mid-tier local: smaller/faster model for quick subtasks
   - model_name: claude-sonnet-4-6
@@ -27,6 +33,15 @@ model_list:
       model: ollama/qwen2.5-coder:7b
       api_base: http://localhost:11434
       timeout: 120
+
+  # Embeddings: exposes POST /v1/embeddings (RAG / semantic search). nomic-embed-text is 274MB, CPU-cheap.
+  # Requires: ollama pull nomic-embed-text
+  - model_name: nomic-embed-text
+    litellm_params:
+      model: ollama/nomic-embed-text
+      api_base: http://localhost:11434
+    model_info:
+      mode: embedding
 
   # Cloud fallback: only when local model is unavailable or task requires it
   # Uncomment and set ANTHROPIC_API_KEY env var to enable

@@ -8,13 +8,12 @@ import { openSession, sendToTab, getMuxInfo } from "../core/zellij.js";
 import { createSession, updateSession } from "../core/session.js";
 import { acquireLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
-import { resolveClaudeCmd, buildClaudeEnv } from "../integrations/autoclaw.js";
+import { buildClaudeEnv } from "../integrations/autoclaw.js";
+import type { CcmuxConfig } from "../config/schema.js";
 import { writeTaskState, taskStateClaudioPreamble } from "../core/taskstate.js";
 import { installSessionHooks } from "../core/hooks.js";
 
-function ccmuxDir(): string {
-  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
-}
+const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
 
 function autoName(): string {
   const hhmm = new Date().toTimeString().slice(0, 5).replace(":", "");
@@ -32,7 +31,7 @@ export interface AutoOptions {
 
 export async function autoCommand(name?: string, opts: AutoOptions = {}): Promise<void> {
   if (opts.resume && !opts.prompt) {
-    const handoffsDir = path.join(ccmuxDir(), "handoffs");
+    const handoffsDir = path.join(CCMUX_DIR, "handoffs");
     try {
       const files = await fs.readdir(handoffsDir);
       const matches = files.filter((f) => f.endsWith(`-${opts.resume}.md`)).sort();
@@ -94,11 +93,10 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
     // Create .claude/tools/ directory for agent self-synthesized tools
     await fs.mkdir(path.join(wt.path, ".claude", "tools"), { recursive: true });
 
-    const baseClaudeCmd = await resolveClaudeCmd(project.defaultLlm);
+    const claudeCmd = buildAutoClaudeCommand(project.defaultLlm, cfg, ["--dangerously-skip-permissions"]);
 
     if (muxType !== "none") {
       // Inside Zellij or tmux — open tab, then send prompt
-      const claudeCmd = `${baseClaudeCmd} --dangerously-skip-permissions`;
       spinner.text = "Opening tab...";
       await openSession(sessionName, wt.path, claudeCmd);
       await updateSession(session.id, { status: "starting" });
@@ -120,7 +118,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
     } else {
       // Outside Zellij — daemon mode
       if (opts.prompt) {
-        const logDir = path.join(ccmuxDir(), "logs");
+        const logDir = path.join(CCMUX_DIR, "logs");
         await fs.mkdir(logDir, { recursive: true });
         const logFile = path.join(logDir, `${sessionName}.log`);
 
@@ -134,6 +132,8 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
             worktreePath: wt.path,
             logFile,
             env,
+            backend: project.defaultLlm,
+            cfg,
             maxIter: opts.maxIter ?? 50,
             until: opts.until ?? "CCMUX_COMPLETE",
             sandbox: opts.sandbox,
@@ -145,7 +145,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
           await fs.writeFile(promptFile, opts.prompt, "utf-8");
 
           const { bin, args: launchArgs } = buildLaunchArgs(
-            ["--dangerously-skip-permissions", "-p", `@${promptFile}`],
+            buildAutoClaudeArgs(project.defaultLlm, cfg, ["--dangerously-skip-permissions", "-p", `@${promptFile}`]),
             wt.path,
             opts.sandbox
           );
@@ -177,7 +177,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
         await updateSession(session.id, { status: "idle" });
         spinner.succeed(chalk.green(`"${sessionName}" worktree ready`));
         console.log(
-          `\n  Start manually:\n  cd "${wt.path}" && ${baseClaudeCmd} --dangerously-skip-permissions\n`
+          `\n  Start manually:\n  cd "${wt.path}" && ${claudeCmd}\n`
         );
       }
     }
@@ -207,13 +207,15 @@ interface LoopDaemonOpts {
   worktreePath: string;
   logFile: string;
   env: Record<string, string>;
+  backend: "claude" | "autoclaw";
+  cfg: CcmuxConfig;
   maxIter: number;
   until: string;
   sandbox?: boolean;
 }
 
 async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
-  const { worktreePath, logFile, env, maxIter, until, prompt, sessionName } = opts;
+  const { worktreePath, logFile, env, maxIter, until, prompt, sessionName, backend, cfg } = opts;
 
   // Write prompt and loop script to worktree (no shell-injected values)
   const promptFile = path.join(worktreePath, "TASK_PROMPT.md");
@@ -222,19 +224,11 @@ async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
 
   const loopScript = path.join(worktreePath, ".ccmux-loop.sh");
   const { bin: claudeBin, args: claudeSandboxArgs } = buildLaunchArgs(
-    ["--dangerously-skip-permissions", "-p", `@${promptFile}`],
+    buildAutoClaudeArgs(backend, cfg, ["--dangerously-skip-permissions", "-p", `@${promptFile}`]),
     worktreePath,
     opts.sandbox
   );
-  // Escape every character that is special inside a bash double-quoted string
-  // (backslash, dollar, double-quote, backtick). Escaping only `"` is
-  // incomplete — a value containing `$`, backtick, or `\` could break out of
-  // the quotes and inject shell. (CodeQL js/incomplete-sanitization)
-  const escapeBashDQ = (s: string): string => s.replace(/[\\$"`]/g, "\\$&");
-
-  const claudeInvocation = [claudeBin, ...claudeSandboxArgs]
-    .map((a) => `"${escapeBashDQ(a)}"`)
-    .join(" ");
+  const claudeInvocation = buildShellInvocation(claudeBin, claudeSandboxArgs);
 
   const scriptContent = [
     `#!/usr/bin/env bash`,
@@ -268,6 +262,45 @@ async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
   await logHandle.close();
 }
 
+
+export function buildAutoClaudeArgs(
+  backend: "claude" | "autoclaw",
+  cfg: CcmuxConfig,
+  claudeArgs: string[] = []
+): string[] {
+  if (backend === "autoclaw" && cfg.autoclaw.model) {
+    return ["--model", cfg.autoclaw.model, ...claudeArgs];
+  }
+
+  return [...claudeArgs];
+}
+
+// Escape every character special inside a bash double-quoted string
+// (backslash, dollar, double-quote, backtick). Escaping only `"` is incomplete
+// — `$`, backtick, or `\` could break out and inject shell. (CodeQL js/incomplete-sanitization)
+function escapeBashDQ(value: string): string {
+  return value.replace(/[\\$"`]/g, "\\$&");
+}
+
+function shellQuote(value: string): string {
+  return `"${escapeBashDQ(value)}"`;
+}
+
+export function buildShellInvocation(bin: string, args: string[]): string {
+  return [bin, ...args].map(shellQuote).join(" ");
+}
+
+export function buildAutoClaudeCommand(
+  backend: "claude" | "autoclaw",
+  cfg: CcmuxConfig,
+  claudeArgs: string[] = []
+): string {
+  const envPrefix = backend === "autoclaw"
+    ? `ANTHROPIC_BASE_URL=${shellQuote(cfg.autoclaw.url)} `
+    : "";
+  return `${envPrefix}${buildShellInvocation("claude", buildAutoClaudeArgs(backend, cfg, claudeArgs))}`;
+}
+
 /**
  * Optionally wrap the claude invocation in bubblewrap for OS-level sandboxing.
  * git worktrees share the object store and do NOT isolate the filesystem —
@@ -275,7 +308,7 @@ async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
  *
  * Requires: bwrap (bubblewrap) installed on the system.
  */
-function buildLaunchArgs(
+export function buildLaunchArgs(
   claudeArgs: string[],
   worktreePath: string,
   sandbox?: boolean

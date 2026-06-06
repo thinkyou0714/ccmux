@@ -234,8 +234,8 @@ async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
     `#!/usr/bin/env bash`,
     `set -euo pipefail`,
     `MAX_ITER="${maxIter}"`,
-    `UNTIL_PATTERN="${until.replace(/"/g, '\\"')}"`,
-    `LOGFILE="${logFile.replace(/"/g, '\\"')}"`,
+    `UNTIL_PATTERN="${escapeBashDQ(until)}"`,
+    `LOGFILE="${escapeBashDQ(logFile)}"`,
     `ITER=0`,
     `while [ "$ITER" -lt "$MAX_ITER" ]; do`,
     `  ITER=$((ITER + 1))`,
@@ -275,8 +275,15 @@ export function buildAutoClaudeArgs(
   return [...claudeArgs];
 }
 
+// Escape every character special inside a bash double-quoted string
+// (backslash, dollar, double-quote, backtick). Escaping only `"` is incomplete
+// — `$`, backtick, or `\` could break out and inject shell. (CodeQL js/incomplete-sanitization)
+function escapeBashDQ(value: string): string {
+  return value.replace(/[\\$"`]/g, "\\$&");
+}
+
 function shellQuote(value: string): string {
-  return `"${value.replace(/"/g, '\\"')}"`;
+  return `"${escapeBashDQ(value)}"`;
 }
 
 export function buildShellInvocation(bin: string, args: string[]): string {

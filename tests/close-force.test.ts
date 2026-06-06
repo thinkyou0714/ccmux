@@ -58,7 +58,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   process.env = { ...origEnv };
-  await fs.rm(tmp, { recursive: true, force: true });
+  // Retry on Windows where git may still hold handles on the temp repo (EBUSY).
+  await fs.rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("closeCommand --force", () => {

@@ -153,9 +153,19 @@ export async function deleteWorktree(
     }
   }
 
-  await execa("git", ["-C", projectPath, "worktree", "remove", wtPath, "--force"], {
-    stdio: "pipe",
-  });
+  try {
+    await execa("git", ["-C", projectPath, "worktree", "remove", wtPath, "--force"], {
+      stdio: "pipe",
+    });
+  } catch {
+    // `git worktree remove` can fail to delete the directory on Windows when
+    // files are still locked. Fall through to a manual, retrying removal.
+  }
+
+  // Ensure the worktree directory is actually gone. On Windows, locked handles
+  // leave residual files behind, so retry; then prune the stale registration.
+  await fs.rm(wtPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await execa("git", ["-C", projectPath, "worktree", "prune"], { stdio: "pipe" }).catch(() => {});
 
   // Delete the branch if it still exists
   try {

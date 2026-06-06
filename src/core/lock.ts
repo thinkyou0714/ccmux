@@ -1,15 +1,20 @@
 import fs from "fs/promises";
 import path from "path";
 
-const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
-const LOCKS_DIR = path.join(CCMUX_DIR, "locks");
+export function ccmuxDir(): string {
+  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
+}
+
+export function locksDir(): string {
+  return path.join(ccmuxDir(), "locks");
+}
 
 function lockPath(name: string): string {
-  return path.join(LOCKS_DIR, `${name}.lock`);
+  return path.join(locksDir(), `${name}.lock`);
 }
 
 export async function acquireLock(name: string): Promise<void> {
-  await fs.mkdir(LOCKS_DIR, { recursive: true });
+  await fs.mkdir(locksDir(), { recursive: true });
   const lp = lockPath(name);
 
   try {

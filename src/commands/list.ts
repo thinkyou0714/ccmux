@@ -90,10 +90,10 @@ export async function listCommand(opts: ListOptions): Promise<void> {
   console.log("\n" + header);
   console.log(chalk.dim("─".repeat(80)));
 
-  let totalUSD = 0;
+  let _totalUSD = 0;
   for (const s of sessions) {
     const cost = await getCost(s, cfg.cost.exchangeRate, cfg.cost.currency);
-    totalUSD += s.costUSD;
+    _totalUSD += s.costUSD;
 
     const row = [
       s.name.padEnd(20),

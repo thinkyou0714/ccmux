@@ -9,6 +9,67 @@ function sessionsFile(): string {
   return path.join(ccmuxDir(), "sessions.json");
 }
 
+function sessionsLockPath(): string {
+  return `${sessionsFile()}.lock`;
+}
+
+const LOCK_RETRY_MS = 10;
+const LOCK_STALE_MS = 30_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function acquireSessionLock(): Promise<() => Promise<void>> {
+  const lockPath = sessionsLockPath();
+
+  while (true) {
+    await fs.mkdir(ccmuxDir(), { recursive: true });
+    try {
+      const handle = await fs.open(lockPath, "wx", 0o600);
+      try {
+        await handle.writeFile(
+          JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })
+        );
+      } finally {
+        await handle.close();
+      }
+      return async () => {
+        try {
+          await fs.unlink(lockPath);
+        } catch {
+          // Best effort cleanup: another process may already have removed a stale lock.
+        }
+      };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") throw err;
+
+      try {
+        const stat = await fs.stat(lockPath);
+        if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+          await fs.unlink(lockPath);
+          continue;
+        }
+      } catch {
+        // The lock disappeared between open/stat/unlink; retry immediately.
+        continue;
+      }
+
+      await sleep(LOCK_RETRY_MS);
+    }
+  }
+}
+
+async function withSessionLock<T>(fn: () => Promise<T>): Promise<T> {
+  const release = await acquireSessionLock();
+  try {
+    return await fn();
+  } finally {
+    await release();
+  }
+}
+
 export type SessionStatus = "created" | "starting" | "idle" | "busy" | "done" | "closed" | "error" | "orphaned";
 
 export interface Session {
@@ -51,31 +112,35 @@ async function writeDB(db: SessionsDB): Promise<void> {
 export async function createSession(
   opts: Omit<Session, "id" | "createdAt" | "updatedAt" | "costUSD" | "status">
 ): Promise<Session> {
-  const db = await readDB();
-  const now = new Date().toISOString();
-  const session: Session = {
-    ...opts,
-    id: randomUUID(),
-    status: "created",
-    costUSD: 0,
-    createdAt: now,
-    updatedAt: now,
-  };
-  db.sessions.push(session);
-  await writeDB(db);
-  return session;
+  return withSessionLock(async () => {
+    const db = await readDB();
+    const now = new Date().toISOString();
+    const session: Session = {
+      ...opts,
+      id: randomUUID(),
+      status: "created",
+      costUSD: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    db.sessions.push(session);
+    await writeDB(db);
+    return session;
+  });
 }
 
 export async function updateSession(
   id: string,
   patch: Partial<Omit<Session, "id" | "createdAt">>
 ): Promise<Session> {
-  const db = await readDB();
-  const idx = db.sessions.findIndex((s) => s.id === id);
-  if (idx === -1) throw new Error(`Session ${id} not found`);
-  db.sessions[idx] = { ...db.sessions[idx], ...patch, updatedAt: new Date().toISOString() };
-  await writeDB(db);
-  return db.sessions[idx];
+  return withSessionLock(async () => {
+    const db = await readDB();
+    const idx = db.sessions.findIndex((s) => s.id === id);
+    if (idx === -1) throw new Error(`Session ${id} not found`);
+    db.sessions[idx] = { ...db.sessions[idx], ...patch, updatedAt: new Date().toISOString() };
+    await writeDB(db);
+    return db.sessions[idx];
+  });
 }
 
 export async function getSession(nameOrId: string): Promise<Session | undefined> {
@@ -97,29 +162,33 @@ export async function listSessions(
 }
 
 export async function removeSession(id: string): Promise<void> {
-  const db = await readDB();
-  db.sessions = db.sessions.filter((s) => s.id !== id);
-  await writeDB(db);
+  await withSessionLock(async () => {
+    const db = await readDB();
+    db.sessions = db.sessions.filter((s) => s.id !== id);
+    await writeDB(db);
+  });
 }
 
 export async function pruneOrphanedSessions(): Promise<number> {
-  const db = await readDB();
-  let pruned = 0;
+  return withSessionLock(async () => {
+    const db = await readDB();
+    let pruned = 0;
 
-  for (const session of db.sessions) {
-    if (session.status === "closed") continue;
-    if (!session.pid) continue;
+    for (const session of db.sessions) {
+      if (session.status === "closed") continue;
+      if (!session.pid) continue;
 
-    // Check if PID is still alive
-    try {
-      process.kill(session.pid, 0);
-    } catch {
-      session.status = "orphaned";
-      session.updatedAt = new Date().toISOString();
-      pruned++;
+      // Check if PID is still alive
+      try {
+        process.kill(session.pid, 0);
+      } catch {
+        session.status = "orphaned";
+        session.updatedAt = new Date().toISOString();
+        pruned++;
+      }
     }
-  }
 
-  if (pruned > 0) await writeDB(db);
-  return pruned;
+    if (pruned > 0) await writeDB(db);
+    return pruned;
+  });
 }

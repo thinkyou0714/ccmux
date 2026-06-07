@@ -1,23 +1,30 @@
-# ccmux — Issue Triage
+# ccmux — Issue Triage & Sprint Plan (2026-06-07)
 
-> Auto-triaged via the `issue-triage` skill (Impact × Effort × Urgency).
-> 17 open issues, all `enhancement` (feature requests) — 0 bugs, 0 close-recommended.
-> Priority labels are applied on each issue.
+> 15 open issues, all `enhancement`, already priority-labeled. This adds **dependency sequencing** and a **suggested sprint order** so the roadmap can be executed without backtracking. Re-generate with `gh issue list -R thinkyou0714/ccmux`.
 
-## Priority
-
-| Priority | Issues |
+## Priority snapshot
+| pri | issues |
 |---|---|
-| **high** | #6 (security: `serve` webhook token auth) · #9 (ci: lint+test+build) · #15 (prune orphaned sessions) |
-| **medium** | #13 (security: `serve` HTTPS/TLS) · #12 (daemon log rotation) |
-| **low** | #2–#5, #7, #8, #10, #11, #14, #16, #17, #38 |
+| high | #15 (`ccmux prune` — impl already exists, just CLI wiring) |
+| medium | #12 (daemon log rotation), #13 (HTTPS for `ccmux serve`) |
+| low | #2 #3 #4 #5 #7 #8 #10 #11 #14 #16 #17 #38 |
 
-## Sprint 1 (recommended, ~8pt cap)
+## Dependency graph (do upstream first)
+- #3 cost tracking → **#10** budget alert
+- #4 `ccmux merge` → **#11** `merge --pr`
+- #6 `serve`+auth → **#13** HTTPS
+- #8 handoff enhance → **#17** custom template / `--resume`
+- #5 `ccmux logs` ↔ **#12** log rotation (sibling)
+- #15, #14, #2, #7, #16, #38 — standalone
 
-Order: **#6 → #9 → #15 → #13 → #12**
+## Suggested sprint order
+1. **Quick wins / foundations** — #15 (`prune`, high, `pruneOrphanedSessions()` already implemented → wire CLI), #14 (`doctor`), #2 (vitest suite — regression safety before further features).
+2. **Cost lane** — #3 (per-session cost via ccusage) → #10 (budget alert).
+3. **Merge lane** — #4 (`ccmux merge`) → #11 (`merge --pr`).
+4. **Ops/handoff lane** — #5 (`ccmux logs`) + #12 (log rotation); #8 (handoff snapshot) → #17 (template/`--resume`).
+5. **Platform/polish** — #7 (tmux backend), #13 (HTTPS), #16 (shell completion), #38 (@eslint/js v10 breaking).
 
-- Lead with **security (#6** webhook token auth**)** + **CI (#9** lint/test/build automation**)**.
-- **#13** (`serve` HTTPS) touches the same `n8n.ts` / serve path as #6 → bundle in the same sprint.
-- **#15** (`pruneOrphanedSessions()` already implemented) is XS effort, high impact.
-
-_Generated 2026-06-06 during the THINK YOU LAB GitHub remediation pass._
+## Notes
+- #15 is the best first issue: high priority **and** the core logic (`pruneOrphanedSessions()` in `src/core/session.ts`) already exists — it only needs a CLI entry point.
+- #2 (tests) should land early; `vitest` is already a devDependency with no tests, so every subsequent feature ships without regression cover until then.
+- #38 is dependency-tracking (Renovate/Dependabot driven) — handle when the eslint v10 group PR lands, not ad-hoc.

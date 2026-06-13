@@ -7,12 +7,12 @@ import tseslint from "typescript-eslint";
 
 export default [
   {
-    ignores: ["dist/**", "node_modules/**", "tests/**", "*.config.js"],
+    ignores: ["dist/**", "node_modules/**", "*.config.js"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["src/**/*.ts"],
+    files: ["src/**/*.ts", "tests/**/*.ts"],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: "module",

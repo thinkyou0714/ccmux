@@ -9,8 +9,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
-    "test": "vitest run --passWithNoTests",
-    "lint": "eslint src --ext .ts"
+    "test": "vitest run",
+    "lint": "eslint src tests",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",

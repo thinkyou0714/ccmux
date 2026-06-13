@@ -13,6 +13,13 @@ Zellij × git worktree × Obsidian integration for managing parallel Claude Code
 - `ccmux close <name>` — Close session + write Obsidian handoff note
 - `ccmux swap <project>` — Hot-swap `CLAUDE.md` + `settings.json` to another project
 - `ccmux auto [name]` — Launch autonomous CC session (detached daemon or Zellij tab)
+- `ccmux serve` — Run the ccmux HTTP control server
+- `ccmux merge <name>` — Merge a session's worktree branch back
+- `ccmux logs [name]` — Tail session logs
+- `ccmux prune` — Remove stale worktrees + dead sessions
+- `ccmux reflect <name>` — Generate a reflection/handoff note for a session
+- `ccmux dashboard [subcommand]` — Open the status dashboard
+- `ccmux doctor` — Diagnose the ccmux + Zellij + Claude Code environment
 - `ccmux init` — Initialize `~/.ccmux/config.json`
 
 ## Install (WSL2 / Linux)

@@ -2,6 +2,7 @@ import chalk from "chalk";
 import ora from "ora";
 import { pruneOrphanedSessions, listSessions, updateSession } from "../core/session.js";
 import { deleteWorktree } from "../core/worktree.js";
+import { loadConfig } from "../config/schema.js";
 
 export interface PruneOptions {
   dryRun?: boolean;
@@ -38,13 +39,14 @@ export async function pruneCommand(opts: PruneOptions): Promise<void> {
     console.log();
     const removeSpinner = ora("Removing orphaned worktrees...").start();
     let removed = 0;
+    const cfg = await loadConfig();
 
     for (const s of orphaned) {
       try {
         if (opts.force) {
-          await deleteWorktreeForce(s.worktreePath, s.projectPath, s.name);
+          await deleteWorktreeForce(s.worktreePath, s.projectPath, s.name, cfg.worktreeBase);
         } else {
-          await deleteWorktree(s.name, s.projectPath);
+          await deleteWorktree(s.name, s.projectPath, { worktreeBase: cfg.worktreeBase });
         }
         await updateSession(s.id, { status: "closed" });
         removed++;
@@ -62,9 +64,17 @@ export async function pruneCommand(opts: PruneOptions): Promise<void> {
   }
 }
 
-async function deleteWorktreeForce(wtPath: string, projectPath: string, name: string): Promise<void> {
+async function deleteWorktreeForce(
+  wtPath: string,
+  projectPath: string,
+  name: string,
+  worktreeBase?: string,
+): Promise<void> {
   const { execa } = await import("execa");
-  const WORKTREE_BASE = process.env.CCMUX_WORKTREE_BASE ?? `${process.env.HOME}/worktrees`;
+  // Resolution order mirrors core/worktree.resolveWorktreeBase:
+  //   1. cfg.worktreeBase (passed by caller)  2. CCMUX_WORKTREE_BASE env  3. ${HOME}/worktrees
+  const WORKTREE_BASE =
+    worktreeBase ?? process.env.CCMUX_WORKTREE_BASE ?? `${process.env.HOME}/worktrees`;
   const fullWtPath = wtPath || `${WORKTREE_BASE}/${name}`;
   const branch = `ccmux/${name}`;
 

@@ -4,19 +4,19 @@ Thanks for your interest in contributing.
 
 ## Development setup
 
-Requires Node 20+ and tmux 3.0+.
+Requires Node 22+ and Zellij 0.40+.
 
 ```bash
 git clone https://github.com/thinkyou0714/ccmux
 cd ccmux
-pnpm install   # or npm install
-pnpm test
-pnpm lint
+npm install
+npm test
+npm run lint
 ```
 
 ## Development workflow
 
-1. Create a branch from `master`
+1. Create a branch from `main`
 2. Make changes — follow existing code style
 3. Run tests and lint locally
 4. Commit using Conventional Commits format:
@@ -36,7 +36,7 @@ pnpm lint
 ## Code style
 
 - TypeScript strict mode
-- ESLint must pass — `pnpm lint`
+- ESLint must pass — `npm run lint`
 - Prefer existing utilities over new abstractions
 - No new dependencies without justification
 
@@ -44,7 +44,7 @@ pnpm lint
 
 Use the **Bug report** issue template. Include:
 - ccmux version (`ccmux --version`)
-- OS, tmux version, Node version, Claude Code version
+- OS, Zellij version, Node version, Claude Code version
 - Steps to reproduce
 - Expected vs actual behavior
 

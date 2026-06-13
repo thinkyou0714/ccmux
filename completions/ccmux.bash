@@ -12,7 +12,7 @@ _ccmux_sessions() {
 _ccmux() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
   local prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local commands="new list ls close rm swap auto serve merge logs prune doctor init"
+  local commands="new list ls close rm swap auto serve merge logs prune doctor init reflect dashboard"
 
   case "${COMP_WORDS[1]}" in
     close|rm|logs|merge|prune)

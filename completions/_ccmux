@@ -20,7 +20,7 @@ _ccmux() {
 
   case $state in
     command)
-      compadd new list ls close rm swap auto serve merge logs prune doctor init
+      compadd new list ls close rm swap auto serve merge logs prune doctor init reflect dashboard
       ;;
     args)
       case ${words[2]} in

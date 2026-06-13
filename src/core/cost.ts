@@ -54,10 +54,22 @@ async function fetchCcusage(): Promise<CcusageJson | null> {
   }
 }
 
+/**
+ * Local calendar date (YYYY-MM-DD) to match ccusage daily entries, which are
+ * bucketed in the user's local zone. Using UTC (toISOString) mis-attributes
+ * costs in zones ahead of UTC (e.g. Asia/Tokyo 09:00-23:59 -> next day).
+ * Override the zone via CCMUX_TIMEZONE; falls back to the system zone.
+ */
+export function localToday(now: Date = new Date()): string {
+  const timeZone = process.env.CCMUX_TIMEZONE || undefined;
+  // en-CA renders as YYYY-MM-DD.
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+
 export async function getTodayCost(): Promise<DailyCostSummary | null> {
   const data = await fetchCcusage();
   if (!data) return null;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localToday();
   const entry = data.daily.find((d) => d.date === today);
   if (!entry) return null;
   return {

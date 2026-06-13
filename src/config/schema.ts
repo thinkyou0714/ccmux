@@ -44,6 +44,8 @@ export interface CcmuxConfig {
     apiKey: string;
     handoffPath: string;
     handoffTemplatePath?: string;
+    /** Opt-in: skip TLS verification for self-signed certs (default false). See README. */
+    allowInsecureTLS?: boolean;
   };
   autoclaw: {
     url: string;
@@ -76,6 +78,7 @@ const DEFAULTS: CcmuxConfig = {
     baseUrl: "http://127.0.0.1:27123",
     apiKey: "",
     handoffPath: "05_PROJECTS/ccmux-sessions",
+    allowInsecureTLS: false,
   },
   autoclaw: { url: "http://autoclaw:3101/task", model: undefined, authToken: undefined },
   cost: { enabled: true, currency: "JPY", exchangeRate: 155 },
@@ -88,7 +91,19 @@ export async function loadConfig(): Promise<CcmuxConfig> {
   if (_config) return _config;
   try {
     const raw = await fs.readFile(configFile(), "utf-8");
-    _config = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<CcmuxConfig>) };
+    const parsed = JSON.parse(raw) as Partial<CcmuxConfig>;
+    // Per-section merge so a partial user config (e.g. {"n8n":{"enabled":true}})
+    // does not drop the other defaults of that section (webhookUrl/servePort/...).
+    _config = {
+      ...DEFAULTS,
+      ...parsed,
+      n8n: { ...DEFAULTS.n8n, ...parsed.n8n },
+      obsidian: { ...DEFAULTS.obsidian, ...parsed.obsidian },
+      autoclaw: { ...DEFAULTS.autoclaw, ...parsed.autoclaw },
+      cost: { ...DEFAULTS.cost, ...parsed.cost },
+      logs: { ...DEFAULTS.logs, ...parsed.logs },
+      projects: { ...DEFAULTS.projects, ...parsed.projects },
+    };
   } catch {
     _config = { ...DEFAULTS };
   }

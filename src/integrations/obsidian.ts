@@ -7,6 +7,13 @@ interface ObsidianConfig {
   apiKey: string;
   handoffPath: string;
   handoffTemplatePath?: string;
+  /**
+   * Opt-in escape hatch for self-signed certs on the local Obsidian Local REST
+   * API. Default false: TLS is verified so the Bearer API key cannot leak to a
+   * MITM. When true, certificate validation is skipped and a warning is logged.
+   * Prefer NODE_EXTRA_CA_CERTS to trust the cert instead (see README).
+   */
+  allowInsecureTLS?: boolean;
 }
 
 export interface HandoffData {
@@ -27,6 +34,7 @@ function resolveObsidianConfig(cfg: ObsidianConfig): ObsidianConfig {
     apiKey: process.env.OBSIDIAN_API_KEY ?? cfg.apiKey,
     handoffPath: cfg.handoffPath,
     handoffTemplatePath: cfg.handoffTemplatePath,
+    allowInsecureTLS: cfg.allowInsecureTLS ?? false,
   };
 }
 
@@ -37,6 +45,12 @@ async function obsidianRequest(
 ): Promise<void> {
   const url = new URL(`/vault/${encodeURIComponent(vaultRelPath)}`, cfg.baseUrl);
   const body = Buffer.from(content, "utf-8");
+
+  if (cfg.allowInsecureTLS && url.protocol === "https:") {
+    console.warn(
+      "[ccmux] obsidian.allowInsecureTLS is enabled — TLS certificate validation is OFF; the API key is exposed to MITM. Prefer NODE_EXTRA_CA_CERTS (see README).",
+    );
+  }
 
   return new Promise((resolve, reject) => {
     const lib = url.protocol === "https:" ? https : http;
@@ -49,7 +63,9 @@ async function obsidianRequest(
           "Content-Type": "text/markdown",
           "Content-Length": body.length,
         },
-        rejectUnauthorized: false,
+        // Default: verify TLS (rejectUnauthorized defaults to true). Only skip
+        // when the user explicitly opts in via obsidian.allowInsecureTLS.
+        rejectUnauthorized: !cfg.allowInsecureTLS,
       },
       (res) => {
         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {

@@ -139,6 +139,13 @@ function send(res: http.ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
+// Neutralize request-derived values before logging: drop anything outside
+// printable ASCII (notably CR/LF) and cap length, so a crafted header can't
+// forge log lines (CodeQL js/log-injection).
+function sanitizeForLog(value: string): string {
+  return value.slice(0, 200).replace(/[^\x20-\x7e]/g, "?");
+}
+
 function checkAuth(req: http.IncomingMessage, authToken: string | undefined): boolean {
   if (!authToken) return true;
   const header = req.headers["authorization"];
@@ -264,7 +271,7 @@ export async function handle(
       const rawEvent = req.headers["x-github-event"];
       const event = Array.isArray(rawEvent) ? rawEvent[0] : rawEvent;
       if (!event || !ALLOWED_EVENTS.has(event)) {
-        console.warn(`ccmux webhook: ignoring unsupported event "${event ?? "(none)"}"`);
+        console.warn(`ccmux webhook: ignoring unsupported event "${sanitizeForLog(event ?? "(none)")}"`);
         return send(res, 200, { ok: false, reason: "unsupported event" });
       }
 
@@ -275,7 +282,7 @@ export async function handle(
       const rawDelivery = req.headers["x-github-delivery"];
       const deliveryId = Array.isArray(rawDelivery) ? rawDelivery[0] : rawDelivery;
       if (deliveryId && deliveryDedup.checkAndAdd(deliveryId)) {
-        console.warn(`ccmux webhook: duplicate delivery ${deliveryId} ignored (replay)`);
+        console.warn(`ccmux webhook: duplicate delivery ${sanitizeForLog(deliveryId)} ignored (replay)`);
         return send(res, 200, { ok: true, dedup: true, deliveryId });
       }
 

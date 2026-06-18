@@ -7,7 +7,8 @@ import { closeCommand } from "./close.js";
 
 export interface MergeOptions {
   squash?: boolean;
-  noFf?: boolean;
+  // commander stores `--no-ff` as `ff: false` (absent/true = allow FF).
+  ff?: boolean;
   target?: string;
   keep?: boolean;
   pr?: boolean;
@@ -52,7 +53,7 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
     const branch = `ccmux/${name}`;
     const mergeArgs = ["merge"];
     if (opts.squash) mergeArgs.push("--squash");
-    if (opts.noFf) mergeArgs.push("--no-ff");
+    if (opts.ff === false) mergeArgs.push("--no-ff");
     mergeArgs.push(branch);
 
     spinner.text = `Merging ${branch} into ${targetBranch}...`;
@@ -82,7 +83,8 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
     }
 
     if (!opts.keep) {
-      await closeCommand(name, { noHandoff: false });
+      // Write the handoff note on auto-close after a merge.
+      await closeCommand(name, { handoff: true });
     }
   } catch (err: unknown) {
     spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));

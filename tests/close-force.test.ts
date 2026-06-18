@@ -87,7 +87,7 @@ describe("closeCommand --force", () => {
 
     await fs.writeFile(path.join(wt.path, "tracked.txt"), "dirty\n");
 
-    await closeCommand(name, { force: true, noHandoff: true, noDashboard: true });
+    await closeCommand(name, { force: true, handoff: false, dashboard: false });
 
     await expect(fs.access(wt.path)).rejects.toThrow();
     const session = await getSession(name);

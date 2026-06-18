@@ -10,13 +10,16 @@ export interface ListOptions {
 }
 
 function statusColor(status: Session["status"]): string {
+  const cell = status.toUpperCase().padEnd(8);
   switch (status) {
-    case "busy": return chalk.yellow(status.toUpperCase().padEnd(8));
-    case "idle": return chalk.green(status.toUpperCase().padEnd(8));
-    case "done": return chalk.blue(status.toUpperCase().padEnd(8));
-    case "error": return chalk.red(status.toUpperCase().padEnd(8));
-    case "orphaned": return chalk.gray(status.toUpperCase().padEnd(8));
-    default: return chalk.dim(status.toUpperCase().padEnd(8));
+    case "created": return chalk.cyan(cell);
+    case "starting": return chalk.cyan(cell);
+    case "busy": return chalk.yellow(cell);
+    case "idle": return chalk.green(cell);
+    case "done": return chalk.blue(cell);
+    case "error": return chalk.red(cell);
+    case "orphaned": return chalk.gray(cell);
+    default: return chalk.dim(cell);
   }
 }
 
@@ -30,8 +33,11 @@ function ago(isoDate: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-async function getCost(session: Session, exchangeRate: number, currency: string): Promise<string> {
-  if (session.costUSD === 0) return chalk.dim("N/A");
+// Returns a *plain* (uncolored) string so callers can pad it to a fixed width
+// before applying color — padding a chalk string counts the invisible ANSI
+// escape bytes and misaligns the column.
+function getCost(session: Session, exchangeRate: number, currency: string): string {
+  if (session.costUSD === 0) return "N/A";
   const amount = currency === "JPY" ? session.costUSD * exchangeRate : session.costUSD;
   const sym = currency === "JPY" ? "¥" : "$";
   return `${sym}${amount.toFixed(currency === "JPY" ? 0 : 3)}`;
@@ -92,14 +98,17 @@ export async function listCommand(opts: ListOptions): Promise<void> {
 
   let _totalUSD = 0;
   for (const s of sessions) {
-    const cost = await getCost(s, cfg.cost.exchangeRate, cfg.cost.currency);
+    const cost = getCost(s, cfg.cost.exchangeRate, cfg.cost.currency);
     _totalUSD += s.costUSD;
+
+    // Pad to the column width first, then color, so ANSI bytes don't skew it.
+    const costCell = cost === "N/A" ? chalk.dim(cost.padEnd(8)) : cost.padEnd(8);
 
     const row = [
       s.name.padEnd(20),
       statusColor(s.status),
       s.branch.padEnd(30),
-      cost.padEnd(8),
+      costCell,
       ago(s.createdAt),
     ].join("  ");
 

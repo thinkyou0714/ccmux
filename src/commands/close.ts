@@ -17,8 +17,11 @@ function ccmuxDir(): string {
 
 export interface CloseOptions {
   force?: boolean;
-  noHandoff?: boolean;
-  noDashboard?: boolean;
+  // commander negatable options: `--no-handoff` / `--no-dashboard` set these to
+  // false; absent/true means run the step. (Previously read as non-existent
+  // `noHandoff`/`noDashboard`, so the flags were silently ignored.)
+  handoff?: boolean;
+  dashboard?: boolean;
 }
 
 async function readClaudeMd(worktreePath: string): Promise<string | undefined> {
@@ -85,7 +88,7 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
       if (!opts.force) throw err;
     }
 
-    if (!opts.noHandoff) {
+    if (opts.handoff !== false) {
 
       const handoffData = {
         sessionName: session.name,
@@ -119,7 +122,7 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
     // BL-7: auto dashboard refresh — write the per-session markdown that
     // 05_OUTPUT/dashboards/ccmux-sessions.base reads. Silent + 3s timeout
     // so Obsidian REST unavailability never blocks the close path.
-    if (cfg.obsidian.enabled && !opts.noDashboard) {
+    if (cfg.obsidian.enabled && opts.dashboard !== false) {
       const rec = {
         id: session.id,
         name: session.name,

@@ -13,11 +13,16 @@ const skipOnWindows = process.platform === "win32" ? describe.skip : describe;
 let tmp: string;
 let binDir: string;
 let stopHook: string;
+const origCcmuxDir = process.env.CCMUX_DIR;
 
 beforeAll(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), "ccmux-ccusage-test-"));
   binDir = path.join(tmp, "bin");
   await fs.mkdir(binDir, { recursive: true });
+  // Isolate the Stop hook's circuit-breaker log (CCMUX_DIR/circuit, I-029) to
+  // this temp dir so an accumulated shared ~/.ccmux/circuit can't pre-trip the
+  // breaker and short-circuit the hook before the ccusage cost capture runs.
+  process.env.CCMUX_DIR = path.join(tmp, ".ccmux");
 
   // Fake `ccusage` shim that always returns a known cost.
   const shim = path.join(binDir, "ccusage");
@@ -37,6 +42,8 @@ echo "1.23"
 });
 
 afterAll(async () => {
+  if (origCcmuxDir === undefined) delete process.env.CCMUX_DIR;
+  else process.env.CCMUX_DIR = origCcmuxDir;
   await fs.rm(tmp, { recursive: true, force: true });
 });
 

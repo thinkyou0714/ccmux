@@ -53,6 +53,15 @@ function db(): Database.Database {
   _db = new Database(want);
   _db.pragma("journal_mode = WAL");
   _db.pragma("busy_timeout = 5000");
+  // I-083: harden the dedup claim against power loss and bound WAL growth.
+  //   - synchronous=NORMAL: with WAL this fsyncs at each checkpoint, so a
+  //     committed claim survives an OS crash (the default of OFF for transient
+  //     state would be cheaper but could lose the winning INSERT after a crash,
+  //     letting a duplicate webhook spawn a second session).
+  //   - journal_size_limit: cap the -wal file at ~6 MB so a long-lived `serve`
+  //     process doesn't let it grow unbounded between checkpoints.
+  _db.pragma("synchronous = NORMAL");
+  _db.pragma("journal_size_limit = 6291456"); // 6 MiB
   _db.exec(`CREATE TABLE IF NOT EXISTS pending_sessions (
     key TEXT PRIMARY KEY,
     source TEXT NOT NULL,

@@ -212,17 +212,25 @@ export async function deleteWorktree(
 }
 
 export async function listWorktrees(projectPath: string): Promise<WorktreeInfo[]> {
+  // I-088: use `-z` (NUL) output. In `--porcelain -z` git terminates every
+  // attribute line with a single NUL and every record with an extra NUL, so a
+  // record boundary is a double-NUL. This is robust to worktree paths that
+  // contain spaces or newlines (which would corrupt the previous `\n\n` split)
+  // and to detached-HEAD records (no `branch` line). gitEnv() pins LC_ALL=C.
   const { stdout } = await execa(
     "git",
-    ["-C", projectPath, "worktree", "list", "--porcelain"],
-    { stdio: "pipe" }
+    ["-C", projectPath, "worktree", "list", "--porcelain", "-z"],
+    { stdio: "pipe", env: gitEnv() }
   );
 
   const worktrees: WorktreeInfo[] = [];
-  const blocks = stdout.trim().split(/\n\n/);
+  // Records are separated by a double-NUL; trailing NUL(s) yield empty records.
+  const blocks = stdout.split("\0\0");
 
   for (const block of blocks) {
-    const lines = block.split("\n");
+    const lines = block.split("\0").filter((l) => l.length > 0);
+    if (lines.length === 0) continue;
+
     const wtPath = lines.find((l) => l.startsWith("worktree "))?.slice(9) ?? "";
     const branch = lines.find((l) => l.startsWith("branch "))?.slice(7) ?? "";
 

@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
+import { z } from "zod";
 import { ccmuxDir } from "./paths.js";
 
 function sessionsFile(): string {
@@ -68,28 +69,48 @@ async function withSessionLock<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export type SessionStatus = "created" | "starting" | "idle" | "busy" | "done" | "closed" | "error" | "orphaned";
+// I-063: the ledger is validated with Zod (mirroring config/schema.ts) so a
+// structurally-wrong sessions.json is caught at read time and routed to the
+// corrupt-backup path, instead of being silently trusted via `as SessionsDB`.
+// The public `SessionStatus`/`Session`/`SessionsDB` types are derived from these
+// schemas with z.infer, keeping the runtime check and the static type in lockstep.
+const SESSION_STATUSES = [
+  "created",
+  "starting",
+  "idle",
+  "busy",
+  "done",
+  "closed",
+  "error",
+  "orphaned",
+] as const;
 
-export interface Session {
-  id: string;
-  name: string;
-  branch: string;
-  worktreePath: string;
-  projectPath: string;
-  zellijTab: string;
-  status: SessionStatus;
-  pid?: number;
-  createdAt: string;
-  updatedAt: string;
-  costUSD: number;
-  project: string;
-  llmBackend: "claude" | "autoclaw";
-}
+const SessionStatusSchema = z.enum(SESSION_STATUSES);
 
-interface SessionsDB {
-  version: number;
-  sessions: Session[];
-}
+const SessionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  branch: z.string(),
+  worktreePath: z.string(),
+  projectPath: z.string(),
+  zellijTab: z.string(),
+  status: SessionStatusSchema,
+  pid: z.number().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  costUSD: z.number(),
+  project: z.string(),
+  llmBackend: z.enum(["claude", "autoclaw"]),
+});
+
+const SessionsDBSchema = z.object({
+  version: z.number(),
+  sessions: z.array(SessionSchema),
+});
+
+export type SessionStatus = z.infer<typeof SessionStatusSchema>;
+export type Session = z.infer<typeof SessionSchema>;
+type SessionsDB = z.infer<typeof SessionsDBSchema>;
 
 async function readDB(): Promise<SessionsDB> {
   let raw: string;
@@ -103,9 +124,16 @@ async function readDB(): Promise<SessionsDB> {
     throw err;
   }
   try {
-    const db = JSON.parse(raw) as SessionsDB;
-    if (!db || !Array.isArray(db.sessions)) throw new Error("missing sessions[] array");
-    return db;
+    const json: unknown = JSON.parse(raw);
+    // I-063: validate the shape with Zod rather than trusting `as SessionsDB`.
+    // A wrong type (sessions not an array, status not a known enum, …) is just
+    // as corrupting as bad JSON — the next write would overwrite real rows — so
+    // both failure modes converge on the backup-and-throw path below.
+    const parsed = SessionsDBSchema.safeParse(json);
+    if (!parsed.success) {
+      throw new Error(z.prettifyError(parsed.error));
+    }
+    return parsed.data;
   } catch (err) {
     // A corrupt ledger must NOT be silently treated as empty — the next write
     // would overwrite every recorded session. Preserve it for recovery and fail
@@ -120,10 +148,43 @@ async function readDB(): Promise<SessionsDB> {
 }
 
 async function writeDB(db: SessionsDB): Promise<void> {
-  await fs.mkdir(ccmuxDir(), { recursive: true });
+  // I-082: durable write. A bare writeFile→rename can still leave the ledger as
+  // a 0-byte file (or pointing at an old inode) after a power loss, because the
+  // page cache hasn't been flushed when the crash hits. We instead:
+  //   1. write the tmp file and fsync its contents before close,
+  //   2. atomically rename it over the real ledger,
+  //   3. fsync the parent directory so the rename itself is durable.
+  // Steps 1+2 guarantee the ledger is never torn; step 3 guarantees the
+  // rename survives a crash immediately after it returns.
+  const dir = ccmuxDir();
+  await fs.mkdir(dir, { recursive: true });
   const tmp = `${sessionsFile()}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(db, null, 2), { mode: 0o600 });
+  const data = JSON.stringify(db, null, 2);
+
+  const fh = await fs.open(tmp, "w", 0o600);
+  try {
+    await fh.writeFile(data);
+    await fh.sync();
+  } finally {
+    await fh.close();
+  }
+
   await fs.rename(tmp, sessionsFile());
+
+  // Best-effort directory fsync so the rename is durable. The dir handle can't
+  // be opened (or sync()'d) on every platform — Windows in particular may throw
+  // EPERM/EISDIR/EACCES — so failures here are intentionally swallowed.
+  try {
+    const dh = await fs.open(dir, "r");
+    try {
+      await dh.sync();
+    } finally {
+      await dh.close();
+    }
+  } catch {
+    // Directory fsync is unsupported here (e.g. Windows) — the data fsync +
+    // atomic rename above already protect against a torn ledger.
+  }
 }
 
 export async function createSession(

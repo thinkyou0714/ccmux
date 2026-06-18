@@ -64,6 +64,16 @@ describe("BL-6 SQLite dedup queue", () => {
     // for these calls.
   });
 
+  it("I-083: connection is in WAL mode (companion -wal file appears)", async () => {
+    // A claim writes a row; in WAL journal_mode SQLite creates a `-wal`
+    // sidecar next to the db. Its presence is a cheap proxy for the PRAGMA
+    // having taken effect. (Closing the connection checkpoints + may remove it,
+    // so assert while the connection is still open.)
+    expect(claimSession("wal-probe", "github").claimed).toBe(true);
+    const entries = await fs.readdir(tmp);
+    expect(entries).toContain("queue.db-wal");
+  });
+
   it("CCMUX_DIR swap between calls opens a different DB", async () => {
     expect(claimSession("issue-1", "github").claimed).toBe(true);
 

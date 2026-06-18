@@ -7,14 +7,22 @@ import { installSessionHooks } from "../src/core/hooks.js";
 
 let tmp: string;
 let stopHook: string;
+const origCcmuxDir = process.env.CCMUX_DIR;
 
 beforeAll(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), "ccmux-circuit-test-"));
+  // Isolate the circuit-breaker log (now written under CCMUX_DIR/circuit, not
+  // inside the worktree — I-029) to this temp dir, so repeated runs don't
+  // accumulate fire timestamps in the shared ~/.ccmux/circuit and pre-trip the
+  // breaker.
+  process.env.CCMUX_DIR = path.join(tmp, ".ccmux");
   await installSessionHooks(tmp, "test-circuit", 50);
   stopHook = path.join(tmp, ".claude", "hooks", "stop.sh");
 });
 
 afterAll(async () => {
+  if (origCcmuxDir === undefined) delete process.env.CCMUX_DIR;
+  else process.env.CCMUX_DIR = origCcmuxDir;
   await fs.rm(tmp, { recursive: true, force: true });
 });
 

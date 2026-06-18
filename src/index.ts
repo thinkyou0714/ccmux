@@ -170,4 +170,15 @@ program
     await dashboardCommand(subcommand, opts);
   });
 
-program.parse(process.argv);
+// parseAsync (not parse) so rejections from async action handlers — e.g. an
+// invalid config surfaced by loadConfig — propagate here instead of becoming an
+// unhandled promise rejection (raw stack trace + opaque exit). We print the
+// actionable message and exit non-zero; full stacks stay available under
+// CCMUX_DEBUG=1 for genuine bugs.
+program.parseAsync(process.argv).catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  if (process.env.CCMUX_DEBUG === "1" && err instanceof Error && err.stack) {
+    console.error(err.stack);
+  }
+  process.exitCode = 1;
+});

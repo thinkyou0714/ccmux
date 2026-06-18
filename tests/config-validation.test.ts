@@ -87,3 +87,44 @@ describe("loadConfig — Zod validation (P0 1.4)", () => {
     expect((cfg as unknown as Record<string, unknown>).futureField).toBeUndefined();
   });
 });
+
+describe("loadConfig — numeric & edge validation", () => {
+  it.each([
+    ["servePort out of range", { n8n: { servePort: 70000 } }],
+    ["servePort negative", { n8n: { servePort: -1 } }],
+    ["servePort non-integer", { n8n: { servePort: 99.9 } }],
+    ["exchangeRate zero", { cost: { exchangeRate: 0 } }],
+    ["exchangeRate negative", { cost: { exchangeRate: -5 } }],
+    ["budgetUSD non-positive", { cost: { budgetUSD: 0 } }],
+  ])("rejects %s", async (_label, body) => {
+    await writeConfig(JSON.stringify(body));
+    const { loadConfig } = await import("../src/config/schema.js");
+    await expect(loadConfig()).rejects.toThrow(/invalid config/i);
+  });
+
+  it("rejects a null section", async () => {
+    await writeConfig(JSON.stringify({ n8n: null }));
+    const { loadConfig } = await import("../src/config/schema.js");
+    await expect(loadConfig()).rejects.toThrow(/invalid config/i);
+  });
+
+  it("rejects a one-sided n8n.tls (keyFile required when tls is present)", async () => {
+    await writeConfig(JSON.stringify({ n8n: { tls: { certFile: "/c.pem" } } }));
+    const { loadConfig } = await import("../src/config/schema.js");
+    await expect(loadConfig()).rejects.toThrow(/invalid config/i);
+  });
+
+  it("round-trips: initConfig writes a config that reloads cleanly to defaults", async () => {
+    const m = await import("../src/config/schema.js");
+    await m.initConfig(); // writes DEFAULTS to disk
+    // Fresh module instance reads the serialized file from disk (bypasses the
+    // in-memory _config cache), proving the written form re-validates.
+    vi.resetModules();
+    const m2 = await import("../src/config/schema.js");
+    const reloaded = await m2.loadConfig();
+    expect(reloaded.cost.currency).toBe("JPY");
+    expect(reloaded.n8n.servePort).toBe(9090);
+    expect(reloaded.obsidian.allowInsecureTLS).toBe(false);
+    expect(reloaded.autoclaw.url).toBe("http://autoclaw:3101/task");
+  });
+});

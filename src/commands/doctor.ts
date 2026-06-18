@@ -74,8 +74,15 @@ async function checkCcusage(): Promise<CheckResult> {
 async function checkConfig(): Promise<CheckResult> {
   const configFile = path.join(ccmuxDir(), "config.json");
   try {
-    const raw = await fs.readFile(configFile, "utf-8");
-    JSON.parse(raw);
+    await fs.access(configFile);
+  } catch {
+    return { label: "~/.ccmux/config.json", ok: false, detail: "not found — run: ccmux init" };
+  }
+  // Validate the way the rest of ccmux does (loadConfig = JSON parse + Zod), so
+  // doctor reports a config that is valid JSON but fails schema validation
+  // instead of mislabeling it "valid".
+  try {
+    await loadConfig();
     return { label: `~/.ccmux/config.json exists and is valid`, ok: true };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -84,8 +91,9 @@ async function checkConfig(): Promise<CheckResult> {
 }
 
 async function checkObsidian(): Promise<CheckResult | null> {
-  const cfg = await loadConfig();
-  if (!cfg.obsidian.enabled || !cfg.obsidian.apiKey) return null;
+  // Invalid config is reported by checkConfig(); skip here rather than crash.
+  const cfg = await loadConfig().catch(() => null);
+  if (!cfg || !cfg.obsidian.enabled || !cfg.obsidian.apiKey) return null;
 
   try {
     const url = new URL("/vault/", cfg.obsidian.baseUrl);
@@ -106,7 +114,14 @@ async function checkObsidian(): Promise<CheckResult | null> {
 }
 
 async function checkAutoclaw(): Promise<CheckResult> {
-  const health = await checkHealth();
+  // checkHealth() loads config; an invalid config is reported by checkConfig(),
+  // so degrade gracefully here rather than crashing the whole doctor run.
+  let health: Awaited<ReturnType<typeof checkHealth>>;
+  try {
+    health = await checkHealth();
+  } catch {
+    return { label: "autoclaw", ok: false, detail: "skipped — config invalid (see config.json check)" };
+  }
   return {
     label: `autoclaw (${health.url})`,
     ok: health.available,
@@ -144,7 +159,9 @@ async function checkAutoMemoryCost(): Promise<CheckResult> {
 }
 
 async function checkOllama(): Promise<CheckResult | null> {
-  const cfg = await loadConfig();
+  // Invalid config is reported by checkConfig(); skip here rather than crash.
+  const cfg = await loadConfig().catch(() => null);
+  if (!cfg) return null;
   // Only check Ollama if autoclaw URL points to localhost:11434 (Ollama default)
   const isOllamaUrl =
     cfg.autoclaw.url.includes("localhost:11434") ||

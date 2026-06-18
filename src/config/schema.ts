@@ -92,7 +92,7 @@ const ProjectConfigSchema = z.object({
 });
 
 const ConfigSchema = z.object({
-  version: z.number().default(1),
+  version: z.number().int().positive().default(1),
   worktreeBase: z.string().default(`${process.env.HOME}/worktrees`),
   zellijSession: z.string().default("lab"),
   defaultProject: z.string().default("think-you-lab"),
@@ -101,7 +101,7 @@ const ConfigSchema = z.object({
     .object({
       enabled: z.boolean().default(false),
       webhookUrl: z.string().default("http://127.0.0.1:5679/webhook/ccmux"),
-      servePort: z.number().default(9090),
+      servePort: z.number().int().min(1).max(65535).default(9090),
       authToken: z.string().optional(),
       webhookSecret: z.string().optional(),
       tls: z.object({ certFile: z.string(), keyFile: z.string() }).optional(),
@@ -128,14 +128,14 @@ const ConfigSchema = z.object({
     .object({
       enabled: z.boolean().default(true),
       currency: z.enum(["JPY", "USD"]).default("JPY"),
-      exchangeRate: z.number().default(155),
-      budgetUSD: z.number().optional(),
+      exchangeRate: z.number().positive().default(155),
+      budgetUSD: z.number().positive().optional(),
     })
     .prefault({}),
   logs: z
     .object({
-      maxAgeDays: z.number().default(30),
-      maxSizeMB: z.number().default(100),
+      maxAgeDays: z.number().int().nonnegative().default(30),
+      maxSizeMB: z.number().int().nonnegative().default(100),
     })
     .prefault({}),
 });

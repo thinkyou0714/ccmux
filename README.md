@@ -53,21 +53,14 @@ ccmux init
 
 ### Obsidian over HTTPS (TLS)
 
-ccmux verifies the TLS certificate on every Obsidian request, so the Bearer API
-key can't leak to a man-in-the-middle. If your Obsidian Local REST API serves
-HTTPS with a **self-signed** certificate, trust the cert rather than disabling
-verification:
+ccmux **always** verifies the TLS certificate on every Obsidian request, so the
+Bearer API key can't leak to a man-in-the-middle — there is no opt-out. If your
+Obsidian Local REST API serves HTTPS with a **self-signed** certificate, trust
+the cert rather than disabling verification:
 
 ```bash
 export NODE_EXTRA_CA_CERTS=/path/to/obsidian-local-rest-api.pem
 ```
-
-As a last-resort escape hatch you can set `"obsidian": { "allowInsecureTLS": true }`
-in the config (default `false`). This skips certificate validation and logs a
-warning on every request — only use it on a trusted local network. For safety it
-**only applies to loopback hosts** (`127.0.0.0/8`, `::1`, `localhost`); for any
-other host TLS verification is enforced regardless and the flag is ignored (with
-a warning), so the API key can't leak to a MITM on a remote Obsidian endpoint.
 
 ## Requirements
 

@@ -32,7 +32,7 @@ describe("loadConfig (G055 — per-section deep merge)", () => {
     expect(cfg.n8n.servePort).toBe(9090);
   });
 
-  it("preserves obsidian defaults (incl. allowInsecureTLS=false) under partial override", async () => {
+  it("preserves obsidian defaults under partial override", async () => {
     await fs.writeFile(
       path.join(process.env.CCMUX_DIR!, "config.json"),
       JSON.stringify({ obsidian: { apiKey: "k" } }),
@@ -41,6 +41,6 @@ describe("loadConfig (G055 — per-section deep merge)", () => {
     const cfg = await loadConfig();
     expect(cfg.obsidian.apiKey).toBe("k");
     expect(cfg.obsidian.baseUrl).toBe("http://127.0.0.1:27123");
-    expect(cfg.obsidian.allowInsecureTLS).toBe(false);
+    expect(cfg.obsidian.handoffPath).toBe("05_PROJECTS/ccmux-sessions");
   });
 });

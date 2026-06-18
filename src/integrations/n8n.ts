@@ -199,44 +199,11 @@ export function verifyGitHubSignature(
   }
 }
 
-/**
- * I-095: extract the GitHub username responsible for an issues webhook. We
- * prefer the issue's own author (`issue.user.login`) and fall back to the
- * delivering actor (`sender.login`). Returns undefined when neither is present
- * (a malformed/partial payload) so the caller can decide how to treat it.
- */
-export function extractIssueAuthor(body: JsonBody): string | undefined {
-  const issue = body.issue as { user?: { login?: unknown } } | undefined;
-  const issueLogin = issue?.user?.login;
-  if (typeof issueLogin === "string" && issueLogin.length > 0) return issueLogin;
-
-  const sender = body.sender as { login?: unknown } | undefined;
-  const senderLogin = sender?.login;
-  if (typeof senderLogin === "string" && senderLogin.length > 0) return senderLogin;
-
-  return undefined;
-}
-
-/**
- * I-095: is `author` permitted by `allowedAuthors`? An undefined/absent list
- * means "no restriction" (legacy behaviour). An explicit list (even empty)
- * gates: an unknown/missing author is rejected.
- */
-export function isAuthorAllowed(
-  author: string | undefined,
-  allowedAuthors: string[] | undefined,
-): boolean {
-  if (allowedAuthors === undefined) return true; // unrestricted
-  if (author === undefined) return false; // restricted but no author to match
-  return allowedAuthors.includes(author);
-}
-
 export async function handle(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   authToken: string | undefined,
   webhookSecret: string | undefined,
-  allowedAuthors?: string[],
 ): Promise<void> {
   const url = req.url ?? "/";
   const method = req.method ?? "GET";
@@ -336,22 +303,6 @@ export async function handle(
       const issue = body.issue as { number: number; title: string; body?: string } | undefined;
       if (!issue) return send(res, 400, { error: "issue payload missing" });
 
-      // I-095: issue-author allowlist (opt-in). After signature + event +
-      // replay gates, narrow the trust boundary for the
-      // `--dangerously-skip-permissions` agent: when allowedAuthors is set, an
-      // issue from an author outside the list is acknowledged (200) but NOT
-      // acted on. Unset list = unrestricted (legacy behaviour). The author is
-      // sanitized before logging (log-injection defence, matches I-073).
-      if (allowedAuthors !== undefined) {
-        const author = extractIssueAuthor(body);
-        if (!isAuthorAllowed(author, allowedAuthors)) {
-          console.warn(
-            `ccmux webhook: issue author "${sanitizeForLog(author ?? "(none)")}" not in allowedAuthors — ignoring`,
-          );
-          return send(res, 200, { ok: false, reason: "author not allowed" });
-        }
-      }
-
       const sessionName = `issue-${issue.number}`;
       const prompt = `Issue #${issue.number}: ${issue.title}\n\n${issue.body ?? ""}`;
 
@@ -413,7 +364,6 @@ export async function startServer(portOverride?: number): Promise<ServerHandle> 
   const port = portOverride ?? cfg.n8n.servePort ?? 9090;
   const authToken = cfg.n8n.authToken;
   const webhookSecret = cfg.n8n.webhookSecret;
-  const allowedAuthors = cfg.n8n.allowedAuthors;
 
   if (!authToken) {
     console.warn("WARNING: n8n.authToken is not set. /session/* endpoints are unauthenticated.");
@@ -423,7 +373,7 @@ export async function startServer(portOverride?: number): Promise<ServerHandle> 
   }
 
   const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
-    handle(req, res, authToken, webhookSecret, allowedAuthors).catch((err: unknown) => {
+    handle(req, res, authToken, webhookSecret).catch((err: unknown) => {
       console.error("ccmux webhook handler error:", err);
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "internal error" }));

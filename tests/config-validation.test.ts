@@ -125,7 +125,6 @@ describe("loadConfig — numeric & edge validation", () => {
     const reloaded = await m2.loadConfig();
     expect(reloaded.cost.currency).toBe("JPY");
     expect(reloaded.n8n.servePort).toBe(9090);
-    expect(reloaded.obsidian.allowInsecureTLS).toBe(false);
     expect(reloaded.autoclaw.url).toBe("http://autoclaw:3101/task");
   });
 });

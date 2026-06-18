@@ -48,8 +48,9 @@ export async function reflectCommand(name: string, opts: ReflectOptions): Promis
       const files = (await fs.readdir(handoffsDir))
         .filter((f) => f.endsWith(`-${name}.md`))
         .sort();
-      if (files.length > 0) {
-        const latest = path.join(handoffsDir, files[files.length - 1]);
+      const latestFile = files[files.length - 1];
+      if (latestFile) {
+        const latest = path.join(handoffsDir, latestFile);
         sourceText = await fs.readFile(latest, "utf-8");
         sourceLabel = latest;
       }
@@ -188,7 +189,7 @@ export function applyReflectionBlock(
   return { content: `${base}${sep}${block}`, replaced: legacyIdx !== -1 };
 }
 
-function parseCmd(cmd: string): string[] {
+function parseCmd(cmd: string): [string, ...string[]] {
   // cmd is either "claude" or `ANTHROPIC_BASE_URL="..." claude [--model x]`
   // Strip env var prefix parts (KEY=VALUE), return [binary, ...args]
   const parts = cmd.split(" ");

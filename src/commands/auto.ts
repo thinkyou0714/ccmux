@@ -34,8 +34,9 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
     try {
       const files = await fs.readdir(handoffsDir);
       const matches = files.filter((f) => f.endsWith(`-${opts.resume}.md`)).sort();
-      if (matches.length > 0) {
-        const latest = path.join(handoffsDir, matches[matches.length - 1]);
+      const latestMatch = matches[matches.length - 1];
+      if (latestMatch) {
+        const latest = path.join(handoffsDir, latestMatch);
         const content = await fs.readFile(latest, "utf-8");
         opts.prompt = `前セッション ${opts.resume} の続きです:\n\n${content}`;
       }

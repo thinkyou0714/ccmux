@@ -93,7 +93,7 @@ describe("readDB (I-063 — Zod-validated ledger, not `as SessionsDB`)", () => {
     await createSession({ name: "ok", ...base });
     const sessions = await listSessions({ includeClosed: true });
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].name).toBe("ok");
+    expect(sessions[0]?.name).toBe("ok");
   });
 });
 

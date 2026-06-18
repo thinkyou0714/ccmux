@@ -73,8 +73,9 @@ describe("loadConfig — Zod validation (P0 1.4)", () => {
     );
     const { loadConfig } = await import("../src/config/schema.js");
     const cfg = await loadConfig();
-    expect(cfg.projects.foo.path).toBe("/repo/foo");
-    expect(cfg.projects.foo.defaultLlm).toBe("claude");
+    expect(cfg.projects.foo).toBeDefined();
+    expect(cfg.projects.foo?.path).toBe("/repo/foo");
+    expect(cfg.projects.foo?.defaultLlm).toBe("claude");
   });
 
   it("strips unknown keys (forward-compatible) while keeping known ones", async () => {

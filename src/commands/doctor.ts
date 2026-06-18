@@ -15,7 +15,9 @@ interface CheckResult {
 
 async function checkNodeVersion(): Promise<CheckResult> {
   const ver = process.versions.node;
-  const major = parseInt(ver.split(".")[0], 10);
+  // split always yields at least one element for a non-empty string; default
+  // to "" so parseInt produces NaN (treated as "< 22") rather than throwing.
+  const major = parseInt(ver.split(".")[0] ?? "", 10);
   return {
     label: `Node.js >= 22 (found ${ver})`,
     ok: major >= 22,

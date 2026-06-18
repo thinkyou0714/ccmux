@@ -99,7 +99,8 @@ async function bootstrapLitellm(opts: InitOptions): Promise<BootstrapResult[]> {
 
     // Step 1b: create venv
     try {
-      const [pyExe, ...pyArgs] = py.split(" ");
+      // findPython() always returns a non-empty string, so split(" ")[0] exists.
+      const [pyExe, ...pyArgs] = py.split(" ") as [string, ...string[]];
       await execa(pyExe, [...pyArgs, "-m", "venv", venvDir()], { stdio: "pipe" });
       results.push({ ok: true, step: "venv create", detail: venvDir() });
     } catch (e) {

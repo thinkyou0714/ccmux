@@ -287,17 +287,24 @@ export async function handle(
       // or be processed at all. Body is size-capped during read (MAX_BODY_BYTES).
       const { raw, json: body } = await readBody(req);
 
-      // BL-1: HMAC signature gate. When webhookSecret is configured, every
-      // request must include a valid X-Hub-Signature-256 header. Missing
-      // secret = unauthenticated webhook (warned at startup) — behaviour
-      // preserved for that opt-out case.
-      if (webhookSecret) {
-        const sig = req.headers["x-hub-signature-256"];
-        const sigStr = Array.isArray(sig) ? sig[0] : sig;
-        if (!verifyGitHubSignature(raw, sigStr, webhookSecret)) {
-          console.warn("ccmux webhook: rejected request with invalid/missing signature");
-          return send(res, 401, { error: "Invalid signature" });
-        }
+      // H-05 / CWE-807: the HMAC signature is MANDATORY. This endpoint triggers
+      // a `--dangerously-skip-permissions` agent, so it must never act on
+      // unauthenticated input. If no secret is configured we refuse outright
+      // (the old "process unsigned payloads" mode was fail-open), and a
+      // missing/invalid signature is rejected. Every path to autoCommand below
+      // is therefore gated by a verified signature — the event/author/action
+      // filters operate only on integrity-protected, authenticated data.
+      if (!webhookSecret) {
+        console.warn(
+          "ccmux webhook: n8n.webhookSecret is not configured — refusing to process (request signing is required).",
+        );
+        return send(res, 503, { error: "webhook signing not configured" });
+      }
+      const sig = req.headers["x-hub-signature-256"];
+      const sigStr = Array.isArray(sig) ? sig[0] : sig;
+      if (!verifyGitHubSignature(raw, sigStr, webhookSecret)) {
+        console.warn("ccmux webhook: rejected request with invalid/missing signature");
+        return send(res, 401, { error: "Invalid signature" });
       }
 
       // I-073: signature-verified — now apply the explicit event allowlist.
@@ -412,7 +419,7 @@ export async function startServer(portOverride?: number): Promise<ServerHandle> 
     console.warn("WARNING: n8n.authToken is not set. /session/* endpoints are unauthenticated.");
   }
   if (!webhookSecret) {
-    console.warn("WARNING: n8n.webhookSecret is not set. /webhook/github accepts unsigned payloads (BL-1).");
+    console.warn("WARNING: n8n.webhookSecret is not set. /webhook/github will REJECT every request (503) until it is configured — signing is required.");
   }
 
   const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {

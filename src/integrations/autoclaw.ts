@@ -58,6 +58,49 @@ export async function resolveClaudeCmd(backend: "claude" | "autoclaw"): Promise<
 }
 
 /**
+ * I-089: cloud credentials that must NOT propagate into a local-LLM (autoclaw)
+ * child running with `--dangerously-skip-permissions`. A prompt-injected agent
+ * pointed at a local model has no business holding cloud API keys / tokens, and
+ * leaking them widens the blast radius of any escape.
+ *
+ * Deliberately a deny-list (not a strict allow-list): the child still needs PATH,
+ * HOME, locale, terminal, proxy, etc., and an over-eager allow-list would silently
+ * break claude in hard-to-debug ways. We remove the known-sensitive cloud vars and
+ * leave everything else intact.
+ */
+const CLOUD_CREDENTIAL_ENV = [
+  // Anthropic / Claude cloud auth
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_API_KEY",
+  // AWS (Bedrock and general)
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "AWS_SECURITY_TOKEN",
+  "AWS_PROFILE",
+  // Google Cloud / Vertex
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GOOGLE_API_KEY",
+  "GCP_PROJECT",
+  // Azure
+  "AZURE_OPENAI_API_KEY",
+  "AZURE_API_KEY",
+  // Other LLM providers
+  "OPENAI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "GROQ_API_KEY",
+  "MISTRAL_API_KEY",
+  "COHERE_API_KEY",
+  "PERPLEXITY_API_KEY",
+  // Source-control tokens
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GITLAB_TOKEN",
+  "NPM_TOKEN",
+] as const;
+
+/**
  * Build the environment object for spawning claude with a given backend.
  * Use this instead of constructing env manually to centralise auth token + URL handling.
  *
@@ -74,9 +117,16 @@ export function buildClaudeEnv(
   if (sessionName) env["CCMUX_SESSION"] = sessionName;
 
   if (backend === "autoclaw") {
+    // I-089: strip cloud credentials before handing the env to the local-LLM
+    // child. Done first so the autoclaw URL/token set below are not clobbered.
+    for (const key of CLOUD_CREDENTIAL_ENV) {
+      delete env[key];
+    }
+
     env["ANTHROPIC_BASE_URL"] = cfg.autoclaw.url;
     // When pointing directly at Ollama, the SDK requires a non-empty auth token.
-    // "ollama" is the conventional placeholder.
+    // "ollama" is the conventional placeholder. This is the *local* proxy token
+    // from config, not an inherited cloud credential.
     if (cfg.autoclaw.authToken) {
       env["ANTHROPIC_AUTH_TOKEN"] = cfg.autoclaw.authToken;
     }

@@ -16,6 +16,88 @@ interface RawBody {
   json: JsonBody;
 }
 
+// I-073: explicit allowlist of GitHub event types we act on. Anything outside
+// the set is acknowledged with 200 (so GitHub stops redelivering) but ignored.
+const ALLOWED_EVENTS = new Set<string>(["issues"]);
+
+/**
+ * I-071: In-memory LRU + TTL set for GitHub `X-GitHub-Delivery` GUIDs, to defend
+ * against webhook *replay* (GitHub redelivery, n8n retry, manual resend) without
+ * spawning a session twice. This is a fast first-line gate that sits in front of
+ * the durable SQLite `claimSession` dedup — together they give defence in depth
+ * (the LRU is per-process and bounded; the DB survives restarts).
+ *
+ * Bounded by both a size cap (oldest entry evicted on overflow) and a 24h TTL
+ * (GitHub's own redelivery window), so a long-lived `serve` process can't leak
+ * memory. Map preserves insertion order, so the first key is always the oldest.
+ */
+export class DeliveryDedup {
+  private readonly seen = new Map<string, number>();
+
+  constructor(
+    private readonly maxEntries = 1000,
+    private readonly ttlMs = 24 * 60 * 60 * 1000,
+  ) {}
+
+  /**
+   * Record `id` as processed. Returns true if it was already seen (a replay),
+   * false if this is the first time. Expired entries are treated as unseen.
+   */
+  checkAndAdd(id: string, now: number = Date.now()): boolean {
+    const prev = this.seen.get(id);
+    if (prev !== undefined) {
+      if (now - prev < this.ttlMs) {
+        // Refresh recency so an actively-replayed id stays hot (move to newest).
+        this.seen.delete(id);
+        this.seen.set(id, prev);
+        return true;
+      }
+      // Expired — fall through and re-register as fresh.
+      this.seen.delete(id);
+    }
+
+    this.evictExpired(now);
+    this.seen.set(id, now);
+
+    // Size cap: evict oldest (insertion-order front) until within bound.
+    while (this.seen.size > this.maxEntries) {
+      const oldest = this.seen.keys().next().value;
+      if (oldest === undefined) break;
+      this.seen.delete(oldest);
+    }
+    return false;
+  }
+
+  private evictExpired(now: number): void {
+    for (const [key, ts] of this.seen) {
+      if (now - ts < this.ttlMs) break; // insertion order ⇒ rest are newer
+      this.seen.delete(key);
+    }
+  }
+
+  /**
+   * Forget a delivery-id so a legitimate redelivery can be processed again.
+   * Used on the failure path (mirrors queue.releaseSession): if the work errored
+   * we must NOT let the in-memory replay gate block GitHub's automatic retry.
+   */
+  remove(id: string): void {
+    this.seen.delete(id);
+  }
+
+  /** Test helper: current tracked entry count. */
+  get size(): number {
+    return this.seen.size;
+  }
+
+  /** Test helper: drop all state. */
+  clear(): void {
+    this.seen.clear();
+  }
+}
+
+// Module-level instance shared across all requests handled by this process.
+export const deliveryDedup = new DeliveryDedup();
+
 // Cap the request body so an unauthenticated client can't exhaust memory by
 // streaming an unbounded POST — HMAC verification only happens after the body
 // is fully read, so the limit must apply during reading.
@@ -108,7 +190,7 @@ export function verifyGitHubSignature(
   }
 }
 
-async function handle(
+export async function handle(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   authToken: string | undefined,
@@ -156,23 +238,45 @@ async function handle(
     }
 
     if (isWebhook) {
-      const event = req.headers["x-github-event"];
-      if (event !== "issues") {
-        return send(res, 200, { ok: false, reason: "not an issues event" });
-      }
-
-      // Read raw body *before* parsing so HMAC verification matches sender bytes.
+      // I-072 (fail-closed): authenticate BEFORE inspecting anything else.
+      // Read the raw body first (HMAC must match the bytes as sent), then verify
+      // the signature. No event-type/action branch may run on an unverified
+      // request — otherwise unsigned payloads could observe behaviour differences
+      // or be processed at all. Body is size-capped during read (MAX_BODY_BYTES).
       const { raw, json: body } = await readBody(req);
 
       // BL-1: HMAC signature gate. When webhookSecret is configured, every
       // request must include a valid X-Hub-Signature-256 header. Missing
-      // secret = unauthenticated webhook (warned at startup).
+      // secret = unauthenticated webhook (warned at startup) — behaviour
+      // preserved for that opt-out case.
       if (webhookSecret) {
         const sig = req.headers["x-hub-signature-256"];
         const sigStr = Array.isArray(sig) ? sig[0] : sig;
         if (!verifyGitHubSignature(raw, sigStr, webhookSecret)) {
+          console.warn("ccmux webhook: rejected request with invalid/missing signature");
           return send(res, 401, { error: "Invalid signature" });
         }
+      }
+
+      // I-073: signature-verified — now apply the explicit event allowlist.
+      // Unsupported events get 200 (not 4xx) so GitHub stops redelivering, but
+      // we never act on them. Log the reason for observability.
+      const rawEvent = req.headers["x-github-event"];
+      const event = Array.isArray(rawEvent) ? rawEvent[0] : rawEvent;
+      if (!event || !ALLOWED_EVENTS.has(event)) {
+        console.warn(`ccmux webhook: ignoring unsupported event "${event ?? "(none)"}"`);
+        return send(res, 200, { ok: false, reason: "unsupported event" });
+      }
+
+      // I-071: replay defence. Dedup on the signed delivery GUID before doing
+      // any work. A repeated delivery-id (GitHub redelivery / n8n retry) returns
+      // 200 {dedup:true} without re-running autoCommand. Absent header ⇒ fall
+      // through to the durable SQLite claim (which still dedups per session key).
+      const rawDelivery = req.headers["x-github-delivery"];
+      const deliveryId = Array.isArray(rawDelivery) ? rawDelivery[0] : rawDelivery;
+      if (deliveryId && deliveryDedup.checkAndAdd(deliveryId)) {
+        console.warn(`ccmux webhook: duplicate delivery ${deliveryId} ignored (replay)`);
+        return send(res, 200, { ok: true, dedup: true, deliveryId });
       }
 
       const action = body.action as string | undefined;
@@ -204,8 +308,11 @@ async function handle(
         await autoCommand(sessionName, { prompt });
       } catch (cmdErr: unknown) {
         // Auto failed before close — drop the queue row so a manual
-        // re-trigger isn't permanently blocked by the dedup gate.
+        // re-trigger isn't permanently blocked by the dedup gate, and forget
+        // the in-memory delivery-id so GitHub's automatic redelivery (which it
+        // sends on our 5xx) can actually retry the work (I-071).
         releaseSession(sessionName);
+        if (deliveryId) deliveryDedup.remove(deliveryId);
         // Log the detail server-side; return a generic message so internal
         // error/stack details aren't exposed to the HTTP caller (CodeQL
         // js/stack-trace-exposure).
@@ -222,7 +329,21 @@ async function handle(
   }
 }
 
-export async function startServer(portOverride?: number): Promise<{ port: number; close: () => Promise<void>; https: boolean }> {
+export interface ServerHandle {
+  port: number;
+  https: boolean;
+  close: () => Promise<void>;
+  /**
+   * I-074: resolves (never rejects) when the server emits a runtime `error`
+   * after a successful listen — e.g. an unrecoverable socket fault. Callers that
+   * `await` it can shut down gracefully instead of hanging forever. If the server
+   * is closed normally this promise simply never settles, which is fine: the
+   * caller has already returned via its own shutdown path.
+   */
+  errored: Promise<Error>;
+}
+
+export async function startServer(portOverride?: number): Promise<ServerHandle> {
   const cfg = await loadConfig();
   const port = portOverride ?? cfg.n8n.servePort ?? 9090;
   const authToken = cfg.n8n.authToken;
@@ -255,14 +376,40 @@ export async function startServer(portOverride?: number): Promise<{ port: number
     server = http.createServer(handler);
   }
 
+  // During startup, a `listen` error (EADDRINUSE, EACCES, …) rejects the boot
+  // promise. We remove this one-shot listener once listening succeeds so it
+  // doesn't double-handle with the persistent runtime handler below.
   await new Promise<void>((resolve, reject) => {
-    server.listen(port, "127.0.0.1", resolve);
-    server.once("error", reject);
+    const onListenError = (err: Error): void => reject(err);
+    server.once("error", onListenError);
+    server.listen(port, "127.0.0.1", () => {
+      server.removeListener("error", onListenError);
+      resolve();
+    });
+  });
+
+  // Resolve the *actual* bound port: when port 0 is requested (ephemeral, used
+  // by tests) the OS assigns a real port that we must report back rather than 0.
+  const addr = server.address();
+  const boundPort = typeof addr === "object" && addr ? addr.port : port;
+
+  // I-074: keep a persistent error handler installed for the life of the server.
+  // Without it a post-listen runtime `error` would crash the process (unhandled
+  // 'error' event) or, with serve.ts's old infinite Promise, hang forever. We
+  // log, flag a non-zero exit code, and surface the error via `errored` so the
+  // owner of the handle can shut down gracefully.
+  const errored = new Promise<Error>((resolve) => {
+    server.on("error", (err: Error) => {
+      console.error("ccmux serve: fatal server error:", err);
+      process.exitCode = 1;
+      resolve(err);
+    });
   });
 
   return {
-    port,
+    port: boundPort,
     https: isHttps,
+    errored,
     close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
   };
 }

@@ -2,7 +2,7 @@ import chalk from "chalk";
 import { startServer } from "../integrations/n8n.js";
 
 export async function serveCommand(opts: { port?: number }): Promise<void> {
-  const { port, close, https: isHttps } = await startServer(opts.port);
+  const { port, close, https: isHttps, errored } = await startServer(opts.port);
   const scheme = isHttps ? "https" : "http";
 
   console.log(
@@ -29,6 +29,12 @@ export async function serveCommand(opts: { port?: number }): Promise<void> {
   process.on("SIGINT", () => void shutdown());
   process.on("SIGTERM", () => void shutdown());
 
-  // Keep process alive
-  await new Promise<never>(() => {});
+  // I-074: keep the process alive until either a signal handler exits it, or the
+  // server emits a fatal runtime error. Previously this was `new Promise(()=>{})`
+  // which hung forever even after the listener died. `errored` resolves on a
+  // post-listen 'error' (process.exitCode already set to 1 by startServer); we
+  // then close gracefully and let the process terminate.
+  const err = await errored;
+  console.error(chalk.red(`\nServer error — shutting down: ${err.message}`));
+  await close().catch(() => {});
 }

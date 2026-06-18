@@ -1,5 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
+import { z } from "zod";
 
 // Phase: 90-pt roadmap — lazy resolution so tests can swap CCMUX_DIR / HOME
 // after module load. Capturing these at module scope was forcing every test
@@ -66,47 +67,118 @@ export interface CcmuxConfig {
   };
 }
 
-const DEFAULTS: CcmuxConfig = {
-  version: 1,
-  worktreeBase: `${process.env.HOME}/worktrees`,
-  zellijSession: "lab",
-  defaultProject: "think-you-lab",
-  projects: {},
-  n8n: { enabled: false, webhookUrl: "http://127.0.0.1:5679/webhook/ccmux", servePort: 9090 },
-  obsidian: {
-    enabled: true,
-    baseUrl: "http://127.0.0.1:27123",
-    apiKey: "",
-    handoffPath: "05_PROJECTS/ccmux-sessions",
-    allowInsecureTLS: false,
-  },
-  autoclaw: { url: "http://autoclaw:3101/task", model: undefined, authToken: undefined },
-  cost: { enabled: true, currency: "JPY", exchangeRate: 155 },
-  logs: { maxAgeDays: 30, maxSizeMB: 100 },
-};
+// ---------------------------------------------------------------------------
+// Zod schema (runtime validation + deep-merge of defaults)
+// ---------------------------------------------------------------------------
+//
+// Every field carries its own `.default(...)`, and every section object carries
+// a `.prefault({})` (input-side default: an absent section is parsed as `{}` so
+// its inner field defaults still apply). This gives true *deep* merge for free:
+// a partial user config such as `{ "n8n": { "enabled": true } }` parses to a
+// fully-populated section (webhookUrl/servePort fall back to their defaults)
+// without a hand-rolled merge helper — Zod is the single source of truth for
+// both shape and defaults, so the schema and DEFAULTS can never drift apart.
+//
+// Unknown keys are stripped (Zod's default object behaviour) rather than
+// rejected, which keeps older binaries forward-compatible with configs that
+// gained new fields. Known keys *are* validated: wrong types, bad enum values,
+// etc. surface as actionable errors instead of silently mis-behaving.
+
+const ProjectConfigSchema = z.object({
+  path: z.string(),
+  claudeMd: z.string().optional(),
+  settings: z.string().optional(),
+  defaultLlm: z.enum(["claude", "autoclaw"]).default("claude"),
+});
+
+const ConfigSchema = z.object({
+  version: z.number().default(1),
+  worktreeBase: z.string().default(`${process.env.HOME}/worktrees`),
+  zellijSession: z.string().default("lab"),
+  defaultProject: z.string().default("think-you-lab"),
+  projects: z.record(z.string(), ProjectConfigSchema).default({}),
+  n8n: z
+    .object({
+      enabled: z.boolean().default(false),
+      webhookUrl: z.string().default("http://127.0.0.1:5679/webhook/ccmux"),
+      servePort: z.number().default(9090),
+      authToken: z.string().optional(),
+      webhookSecret: z.string().optional(),
+      tls: z.object({ certFile: z.string(), keyFile: z.string() }).optional(),
+    })
+    .prefault({}),
+  obsidian: z
+    .object({
+      enabled: z.boolean().default(true),
+      baseUrl: z.string().default("http://127.0.0.1:27123"),
+      apiKey: z.string().default(""),
+      handoffPath: z.string().default("05_PROJECTS/ccmux-sessions"),
+      handoffTemplatePath: z.string().optional(),
+      allowInsecureTLS: z.boolean().default(false),
+    })
+    .prefault({}),
+  autoclaw: z
+    .object({
+      url: z.string().default("http://autoclaw:3101/task"),
+      model: z.string().optional(),
+      authToken: z.string().optional(),
+    })
+    .prefault({}),
+  cost: z
+    .object({
+      enabled: z.boolean().default(true),
+      currency: z.enum(["JPY", "USD"]).default("JPY"),
+      exchangeRate: z.number().default(155),
+      budgetUSD: z.number().optional(),
+    })
+    .prefault({}),
+  logs: z
+    .object({
+      maxAgeDays: z.number().default(30),
+      maxSizeMB: z.number().default(100),
+    })
+    .prefault({}),
+});
+
+// Deriving DEFAULTS from the schema (rather than a separate literal) binds the
+// two together: the `CcmuxConfig` annotation makes tsc fail the build if the
+// schema's inferred type ever drifts from the public interface.
+const DEFAULTS: CcmuxConfig = ConfigSchema.parse({});
 
 let _config: CcmuxConfig | null = null;
 
 export async function loadConfig(): Promise<CcmuxConfig> {
   if (_config) return _config;
+
+  let raw: string;
   try {
-    const raw = await fs.readFile(configFile(), "utf-8");
-    const parsed = JSON.parse(raw) as Partial<CcmuxConfig>;
-    // Per-section merge so a partial user config (e.g. {"n8n":{"enabled":true}})
-    // does not drop the other defaults of that section (webhookUrl/servePort/...).
-    _config = {
-      ...DEFAULTS,
-      ...parsed,
-      n8n: { ...DEFAULTS.n8n, ...parsed.n8n },
-      obsidian: { ...DEFAULTS.obsidian, ...parsed.obsidian },
-      autoclaw: { ...DEFAULTS.autoclaw, ...parsed.autoclaw },
-      cost: { ...DEFAULTS.cost, ...parsed.cost },
-      logs: { ...DEFAULTS.logs, ...parsed.logs },
-      projects: { ...DEFAULTS.projects, ...parsed.projects },
-    };
+    raw = await fs.readFile(configFile(), "utf-8");
   } catch {
-    _config = { ...DEFAULTS };
+    // No config file (fresh install) — defaults are the expected behaviour.
+    _config = ConfigSchema.parse({});
+    return _config;
   }
+
+  // The file exists: a malformed config is a user error we must surface, not
+  // silently swallow into defaults (which would mask the mistake and run with
+  // the wrong settings).
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `ccmux: ${configFile()} is not valid JSON — ${(err as Error).message}`,
+    );
+  }
+
+  const result = ConfigSchema.safeParse(json);
+  if (!result.success) {
+    throw new Error(
+      `ccmux: invalid config at ${configFile()}\n${z.prettifyError(result.error)}`,
+    );
+  }
+
+  _config = result.data;
   return _config;
 }
 

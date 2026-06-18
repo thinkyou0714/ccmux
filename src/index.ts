@@ -83,7 +83,14 @@ program
     await initConfig();
     if (opts.promptFile && !opts.prompt) {
       const { default: fs } = await import("fs/promises");
-      opts.prompt = (await fs.readFile(opts.promptFile, "utf-8")).trim();
+      try {
+        opts.prompt = (await fs.readFile(opts.promptFile, "utf-8")).trim();
+      } catch (err: unknown) {
+        // Surface a path-qualified message via the index.ts aggregate catch
+        // instead of a raw ENOENT stack the user has to decode.
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(`cannot read --prompt-file "${opts.promptFile}": ${reason}`);
+      }
     }
     await autoCommand(name, opts);
   });

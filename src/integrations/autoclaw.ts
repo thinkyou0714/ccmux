@@ -1,4 +1,5 @@
 import http from "http";
+import https from "https";
 import { loadConfig, CcmuxConfig } from "../config/schema.js";
 
 export interface AutoclawHealth {
@@ -24,8 +25,11 @@ export async function checkHealth(): Promise<AutoclawHealth> {
   }
 
   const start = Date.now();
+  // Pick the transport from the URL scheme — using http for an https:// URL
+  // would connect in cleartext and leak the Bearer token.
+  const lib = healthUrl.startsWith("https:") ? https : http;
   return new Promise((resolve) => {
-    const req = http.get(healthUrl, { timeout: 3000 }, (res) => {
+    const req = lib.get(healthUrl, { timeout: 3000 }, (res) => {
       res.resume(); // consume response body
       const latencyMs = Date.now() - start;
       resolve({ available: res.statusCode === 200, url, latencyMs });
@@ -114,7 +118,10 @@ export async function routeTask(prompt: string): Promise<{ taskId: string }> {
       timeout: 10000,
     };
 
-    const req = http.request(options, (res) => {
+    // Use https for https:// URLs (cleartext http would leak the auth token,
+    // and the default port would be wrong).
+    const lib = url.protocol === "https:" ? https : http;
+    const req = lib.request(options, (res) => {
       let data = "";
       res.on("data", (chunk: Buffer) => { data += chunk.toString(); });
       res.on("end", () => {
@@ -126,7 +133,9 @@ export async function routeTask(prompt: string): Promise<{ taskId: string }> {
             resolve({ taskId: "unknown" });
           }
         } else {
-          reject(new Error(`autoclaw returned HTTP ${res.statusCode}: ${data}`));
+          // Don't embed the upstream response body in the error — it can carry
+          // internal details / secrets and propagates to logs/callers (H-12).
+          reject(new Error(`autoclaw returned HTTP ${res.statusCode}`));
         }
       });
     });

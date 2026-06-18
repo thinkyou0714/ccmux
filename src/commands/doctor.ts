@@ -4,10 +4,7 @@ import fs from "fs/promises";
 import path from "path";
 import { loadConfig } from "../config/schema.js";
 import { checkHealth } from "../integrations/autoclaw.js";
-
-function ccmuxDir(): string {
-  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
-}
+import { ccmuxDir } from "../core/paths.js";
 
 interface CheckResult {
   label: string;

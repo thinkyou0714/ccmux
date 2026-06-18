@@ -1,13 +1,12 @@
 import fs from "fs/promises";
 import path from "path";
 import { z } from "zod";
+import { home, ccmuxDir } from "../core/paths.js";
 
 // Phase: 90-pt roadmap — lazy resolution so tests can swap CCMUX_DIR / HOME
 // after module load. Capturing these at module scope was forcing every test
-// that touches config to monkey-patch fs.
-function ccmuxDir(): string {
-  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
-}
+// that touches config to monkey-patch fs. ccmuxDir()/home() now live in
+// core/paths.js (I-030) but the lazy contract is unchanged.
 function configFile(): string {
   return path.join(ccmuxDir(), "config.json");
 }
@@ -93,7 +92,10 @@ const ProjectConfigSchema = z.object({
 
 const ConfigSchema = z.object({
   version: z.number().int().positive().default(1),
-  worktreeBase: z.string().default(`${process.env.HOME}/worktrees`),
+  // Function default (zod v4): evaluated lazily at parse time, so a fresh
+  // ConfigSchema.parse({}) picks up the current HOME instead of whatever it was
+  // at module load — matching the lazy-resolution contract above (I-030).
+  worktreeBase: z.string().default(() => `${home()}/worktrees`),
   zellijSession: z.string().default("lab"),
   defaultProject: z.string().default("think-you-lab"),
   projects: z.record(z.string(), ProjectConfigSchema).default({}),

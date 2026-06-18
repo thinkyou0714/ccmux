@@ -184,16 +184,22 @@ export async function deleteWorktree(
   try {
     await execa("git", ["-C", projectPath, "worktree", "remove", wtPath, "--force"], {
       stdio: "pipe",
+      env: gitEnv(),
     });
-  } catch {
+  } catch (err: unknown) {
     // `git worktree remove` can fail to delete the directory on Windows when
-    // files are still locked. Fall through to a manual, retrying removal.
+    // files are still locked. Surface why (don't silently swallow it), then fall
+    // through to a manual, retrying removal.
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(
+      `ccmux: git worktree remove failed for "${name}" (${msg.slice(0, 120)}) — removing directory directly`,
+    );
   }
 
   // Ensure the worktree directory is actually gone. On Windows, locked handles
   // leave residual files behind, so retry; then prune the stale registration.
   await fs.rm(wtPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-  await execa("git", ["-C", projectPath, "worktree", "prune"], { stdio: "pipe" }).catch(() => {});
+  await execa("git", ["-C", projectPath, "worktree", "prune"], { stdio: "pipe", env: gitEnv() }).catch(() => {});
 
   // Delete the branch if it still exists
   try {

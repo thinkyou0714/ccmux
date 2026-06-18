@@ -10,10 +10,7 @@ import { releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { writeObsidianHandoff, exportSessionForDashboard } from "../integrations/obsidian.js";
 import { completeSession } from "../core/queue.js";
-
-function ccmuxDir(): string {
-  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
-}
+import { ccmuxDir } from "../core/paths.js";
 
 export interface CloseOptions {
   force?: boolean;

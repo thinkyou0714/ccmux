@@ -1,9 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-
-export function ccmuxDir(): string {
-  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
-}
+import { ccmuxDir } from "./paths.js";
 
 export function locksDir(): string {
   return path.join(ccmuxDir(), "locks");

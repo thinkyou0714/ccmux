@@ -12,8 +12,7 @@ import { buildClaudeEnv } from "../integrations/autoclaw.js";
 import type { CcmuxConfig } from "../config/schema.js";
 import { writeTaskState, taskStateClaudioPreamble } from "../core/taskstate.js";
 import { installSessionHooks } from "../core/hooks.js";
-
-const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
+import { ccmuxDir } from "../core/paths.js";
 
 function autoName(): string {
   const hhmm = new Date().toTimeString().slice(0, 5).replace(":", "");
@@ -31,7 +30,7 @@ export interface AutoOptions {
 
 export async function autoCommand(name?: string, opts: AutoOptions = {}): Promise<void> {
   if (opts.resume && !opts.prompt) {
-    const handoffsDir = path.join(CCMUX_DIR, "handoffs");
+    const handoffsDir = path.join(ccmuxDir(), "handoffs");
     try {
       const files = await fs.readdir(handoffsDir);
       const matches = files.filter((f) => f.endsWith(`-${opts.resume}.md`)).sort();
@@ -118,7 +117,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
     } else {
       // Outside Zellij — daemon mode
       if (opts.prompt) {
-        const logDir = path.join(CCMUX_DIR, "logs");
+        const logDir = path.join(ccmuxDir(), "logs");
         await fs.mkdir(logDir, { recursive: true });
         const logFile = path.join(logDir, `${sessionName}.log`);
 

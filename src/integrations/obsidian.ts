@@ -38,12 +38,28 @@ function resolveObsidianConfig(cfg: ObsidianConfig): ObsidianConfig {
   };
 }
 
+// Encode a vault-relative path for the REST API: percent-encode each segment
+// but preserve the `/` separators (encodeURIComponent on the whole string turns
+// them into %2F and breaks the path), and reject `.`/`..`/absolute segments so a
+// config-supplied handoffPath can't traverse the vault.
+function encodeVaultPath(relPath: string): string {
+  const segments = relPath.split("/").filter((s) => s.length > 0);
+  return segments
+    .map((seg) => {
+      if (seg === "." || seg === "..") {
+        throw new Error(`unsafe vault path segment in "${relPath}"`);
+      }
+      return encodeURIComponent(seg);
+    })
+    .join("/");
+}
+
 async function obsidianRequest(
   cfg: ObsidianConfig,
   vaultRelPath: string,
   content: string
 ): Promise<void> {
-  const url = new URL(`/vault/${encodeURIComponent(vaultRelPath)}`, cfg.baseUrl);
+  const url = new URL(`/vault/${encodeVaultPath(vaultRelPath)}`, cfg.baseUrl);
   const body = Buffer.from(content, "utf-8");
 
   if (cfg.allowInsecureTLS && url.protocol === "https:") {

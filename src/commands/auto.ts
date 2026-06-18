@@ -6,7 +6,7 @@ import path from "path";
 import { createWorktree } from "../core/worktree.js";
 import { openSession, sendToTab, getMuxInfo } from "../core/zellij.js";
 import { createSession, updateSession } from "../core/session.js";
-import { acquireLock } from "../core/lock.js";
+import { acquireLock, releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { buildClaudeEnv } from "../integrations/autoclaw.js";
 import type { CcmuxConfig } from "../config/schema.js";
@@ -196,6 +196,9 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
       ].join("\n")
     );
   } catch (err: unknown) {
+    // Setup failed — free the name lock we acquired so a retry isn't blocked
+    // by a leaked lock (previously released on no path).
+    await releaseLock(sessionName).catch(() => {});
     spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
     process.exit(1);
   }

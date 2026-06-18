@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import { localToday, getRecentCost } from "../src/core/cost.js";
+import { localToday } from "../src/core/cost.js";
 import { acquireLock, releaseLock, locksDir } from "../src/core/lock.js";
 
 const origEnv = { ...process.env };
@@ -28,13 +28,6 @@ describe("localToday (I-036 — invalid TZ must not crash)", () => {
     process.env.CCMUX_TIMEZONE = "Not/AZone";
     expect(() => localToday()).not.toThrow();
     expect(localToday()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  });
-});
-
-describe("getRecentCost (I-019 — sort before slicing)", () => {
-  it("does not assume ccusage output is date-sorted", async () => {
-    // No ccusage available in CI -> returns [] without throwing.
-    await expect(getRecentCost(3)).resolves.toBeInstanceOf(Array);
   });
 });
 

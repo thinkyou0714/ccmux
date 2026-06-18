@@ -94,11 +94,30 @@ interface SessionsDB {
 }
 
 async function readDB(): Promise<SessionsDB> {
+  let raw: string;
   try {
-    const raw = await fs.readFile(sessionsFile(), "utf-8");
-    return JSON.parse(raw) as SessionsDB;
-  } catch {
-    return { version: 1, sessions: [] };
+    raw = await fs.readFile(sessionsFile(), "utf-8");
+  } catch (err) {
+    // No ledger yet (fresh install) is normal — start empty.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { version: 1, sessions: [] };
+    }
+    throw err;
+  }
+  try {
+    const db = JSON.parse(raw) as SessionsDB;
+    if (!db || !Array.isArray(db.sessions)) throw new Error("missing sessions[] array");
+    return db;
+  } catch (err) {
+    // A corrupt ledger must NOT be silently treated as empty — the next write
+    // would overwrite every recorded session. Preserve it for recovery and fail
+    // loudly instead.
+    const backup = `${sessionsFile()}.corrupt.${Date.now()}`;
+    await fs.copyFile(sessionsFile(), backup).catch(() => {});
+    throw new Error(
+      `ccmux: sessions ledger at ${sessionsFile()} is corrupt — backed up to ${backup}. ` +
+        `Inspect/restore it, or delete it to start fresh. (${(err as Error).message})`,
+    );
   }
 }
 
@@ -114,6 +133,12 @@ export async function createSession(
 ): Promise<Session> {
   return withSessionLock(async () => {
     const db = await readDB();
+    // The OS lock (core/lock.ts) is meant to prevent same-name sessions, but if
+    // it leaks/fails the ledger must still not accumulate duplicate live rows
+    // (getSession returns only the first, orphaning the other's worktree/tab).
+    if (db.sessions.some((s) => s.name === opts.name && s.status !== "closed")) {
+      throw new Error(`Session "${opts.name}" already exists (not closed).`);
+    }
     const now = new Date().toISOString();
     const session: Session = {
       ...opts,

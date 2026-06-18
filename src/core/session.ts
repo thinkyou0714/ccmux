@@ -42,7 +42,11 @@ async function acquireSessionLock(): Promise<() => Promise<void>> {
       };
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "EEXIST") throw err;
+      // EEXIST = the lock is held. On Windows, a concurrent O_EXCL create can
+      // surface a sharing violation as EPERM/EACCES instead of EEXIST — treat
+      // those as "contended, retry" rather than a hard failure (otherwise 25
+      // concurrent createSession calls flake on Windows).
+      if (code !== "EEXIST" && code !== "EPERM" && code !== "EACCES") throw err;
 
       try {
         const stat = await fs.stat(lockPath);
@@ -51,7 +55,8 @@ async function acquireSessionLock(): Promise<() => Promise<void>> {
           continue;
         }
       } catch {
-        // The lock disappeared between open/stat/unlink; retry immediately.
+        // The lock isn't actually there (the EPERM/EEXIST was a transient race),
+        // or it vanished between open/stat — retry immediately.
         continue;
       }
 

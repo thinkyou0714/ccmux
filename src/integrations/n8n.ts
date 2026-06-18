@@ -16,11 +16,29 @@ interface RawBody {
   json: JsonBody;
 }
 
+// Cap the request body so an unauthenticated client can't exhaust memory by
+// streaming an unbounded POST — HMAC verification only happens after the body
+// is fully read, so the limit must apply during reading.
+const MAX_BODY_BYTES = 1_048_576; // 1 MiB
+
 function readBody(req: http.IncomingMessage): Promise<RawBody> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => { chunks.push(chunk); });
+    let size = 0;
+    let aborted = false;
+    req.on("data", (chunk: Buffer) => {
+      if (aborted) return;
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        aborted = true;
+        reject(new Error("Payload too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => {
+      if (aborted) return;
       const raw = Buffer.concat(chunks);
       try {
         const json = raw.length === 0 ? {} : (JSON.parse(raw.toString("utf-8")) as JsonBody);
@@ -42,8 +60,17 @@ function send(res: http.ServerResponse, status: number, body: unknown): void {
 function checkAuth(req: http.IncomingMessage, authToken: string | undefined): boolean {
   if (!authToken) return true;
   const header = req.headers["authorization"];
-  if (!header) return false;
-  return header === `Bearer ${authToken}`;
+  if (!header || typeof header !== "string") return false;
+  // Constant-time comparison (matches verifyGitHubSignature) so the Bearer token
+  // can't be recovered a character at a time via response-timing differences.
+  const got = Buffer.from(header);
+  const expected = Buffer.from(`Bearer ${authToken}`);
+  if (got.length !== expected.length) return false;
+  try {
+    return crypto.timingSafeEqual(got, expected);
+  } catch {
+    return false;
+  }
 }
 
 /**

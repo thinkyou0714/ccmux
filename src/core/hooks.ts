@@ -333,7 +333,7 @@ if [ "$TOOL" = "Bash" ]; then
   [ -z "$CMD" ] && CMD=$(extract toolInput.command)
 
   if [ "$\{CCMUX_BLOCKLIST_OVERRIDE:-0}" != "1" ] && [ -n "$CMD" ]; then
-    DESTRUCTIVE='drizzle-kit[[:space:]]+push[[:space:]]+.*--force|prisma[[:space:]]+migrate[[:space:]]+(reset|deploy[[:space:]]+--force)|DROP[[:space:]]+(TABLE|DATABASE|SCHEMA)|TRUNCATE[[:space:]]+TABLE|DELETE[[:space:]]+FROM[[:space:]]+[^;]*WHERE[[:space:]]+(1=1|true)|rm[[:space:]]+-rf[[:space:]]+(/|~|--no-preserve-root)|git[[:space:]]+push[[:space:]]+(.*--force|-f[[:space:]]|-f$)|git[[:space:]]+reset[[:space:]]+--hard[[:space:]]+origin|git[[:space:]]+clean[[:space:]]+-fdx|docker[[:space:]]+(compose[[:space:]]+)?up[[:space:]]+.*-d.*(prod|production)|kubectl[[:space:]]+delete[[:space:]]+(namespace|ns|all)|terraform[[:space:]]+destroy|supabase[[:space:]]+db[[:space:]]+reset|psql[[:space:]]+.*-c[[:space:]]+.{0,3}DROP|mongo[[:space:]]+.*dropDatabase|aws[[:space:]]+s3[[:space:]]+rb[[:space:]]+.*--force|gh[[:space:]]+repo[[:space:]]+delete[[:space:]]+.*--yes|npm[[:space:]]+publish|cargo[[:space:]]+publish|cat[[:space:]]+[^|]*\\.env|cat[[:space:]]+[^|]*credentials|cat[[:space:]]+[^|]*\\.aws/|cat[[:space:]]+[^|]*id_(rsa|ed25519)|curl[[:space:]]+.*\\.env'
+    DESTRUCTIVE='drizzle-kit[[:space:]]+push[[:space:]]+.*--force|prisma[[:space:]]+migrate[[:space:]]+(reset|deploy[[:space:]]+--force)|DROP[[:space:]]+(TABLE|DATABASE|SCHEMA)|TRUNCATE[[:space:]]+TABLE|DELETE[[:space:]]+FROM[[:space:]]+[^;]*WHERE[[:space:]]+(1=1|true)|rm[[:space:]]+-rf[[:space:]]+(/|~|--no-preserve-root)|git[[:space:]]+push[[:space:]]+(.*--force|-f[[:space:]]|-f$)|git[[:space:]]+reset[[:space:]]+--hard[[:space:]]+origin|git[[:space:]]+clean[[:space:]]+-fdx|docker[[:space:]]+(compose[[:space:]]+)?up[[:space:]]+.*-d.*(prod|production)|kubectl[[:space:]]+delete[[:space:]]+(namespace|ns|all)|terraform[[:space:]]+destroy|supabase[[:space:]]+db[[:space:]]+reset|psql[[:space:]]+.*-c[[:space:]]+.{0,3}DROP|mongo[[:space:]]+.*dropDatabase|aws[[:space:]]+s3[[:space:]]+rb[[:space:]]+.*--force|gh[[:space:]]+repo[[:space:]]+delete[[:space:]]+.*--yes|npm[[:space:]]+publish|cargo[[:space:]]+publish|cat[[:space:]]+[^|]*\\.env|cat[[:space:]]+[^|]*credentials|cat[[:space:]]+[^|]*\\.aws/|cat[[:space:]]+[^|]*id_(rsa|ed25519)|curl[[:space:]]+.*\\.env|--no-verify|core\\.hooksPath='
 
     MATCHED=$(echo "$CMD" | grep -oE "$DESTRUCTIVE" 2>/dev/null | head -1 || true)
     if [ -n "$MATCHED" ]; then
@@ -453,6 +453,12 @@ async function writeSettingsOverlay(
         "Bash(curl api.anthropic.com*)",
         "Bash(wget https://api.anthropic.com*)",
         "Bash(sudo *)",
+        // Alternate push / file-write routes that bypass the Bash blocklist.
+        "mcp__github__push_files",
+        "mcp__github__create_or_update_file",
+        "mcp__github__merge_pull_request",
+        "mcp__github__delete_file",
+        "mcp__github__update_pull_request_branch",
       ],
     },
   };

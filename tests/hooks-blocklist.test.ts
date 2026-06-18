@@ -73,6 +73,12 @@ describe("BL-2: destructive Bash blocklist", () => {
     expect(runHook(bashEvt("supabase db reset")).exitCode).toBe(2);
   });
 
+  it("blocks pre-commit hook bypass (--no-verify / core.hooksPath)", () => {
+    expect(runHook(bashEvt("git commit --no-verify -m wip")).exitCode).toBe(2);
+    expect(runHook(bashEvt("git push --no-verify")).exitCode).toBe(2);
+    expect(runHook(bashEvt("git -c core.hooksPath=/dev/null commit -m x")).exitCode).toBe(2);
+  });
+
   it("allows safe commands", () => {
     expect(runHook(bashEvt("ls -la")).exitCode).toBe(0);
     expect(runHook(bashEvt("git status")).exitCode).toBe(0);

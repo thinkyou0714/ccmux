@@ -36,6 +36,14 @@ export interface CcmuxConfig {
      * matching signature are rejected with 401.
      */
     webhookSecret?: string;
+    /**
+     * I-095: opt-in allowlist of GitHub usernames whose opened issues may
+     * trigger an agent. When set, a webhook whose issue author (or sender) is
+     * not in this list is acknowledged with 200 {ok:false} but does NOT spawn a
+     * `--dangerously-skip-permissions` agent. Undefined/absent = no restriction
+     * (every author allowed) — preserves prior behaviour.
+     */
+    allowedAuthors?: string[];
     tls?: { certFile: string; keyFile: string };
   };
   obsidian: {
@@ -106,6 +114,10 @@ const ConfigSchema = z.object({
       servePort: z.number().int().min(1).max(65535).default(9090),
       authToken: z.string().optional(),
       webhookSecret: z.string().optional(),
+      // I-095: omit = unrestricted (legacy behaviour). When present, only these
+      // authors' opened issues spawn an agent. Optional (not defaulted to []) so
+      // the "unset" case is distinguishable from an explicit empty allowlist.
+      allowedAuthors: z.array(z.string()).optional(),
       tls: z.object({ certFile: z.string(), keyFile: z.string() }).optional(),
     })
     .prefault({}),

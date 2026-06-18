@@ -5,6 +5,7 @@ import path from "path";
 import { loadConfig } from "../config/schema.js";
 import { checkHealth } from "../integrations/autoclaw.js";
 import { ccmuxDir } from "../core/paths.js";
+import { redactSecret } from "../core/redact.js";
 
 interface CheckResult {
   label: string;
@@ -146,6 +147,28 @@ async function checkBubblewrap(): Promise<CheckResult | null> {
   }
 }
 
+async function checkWebhookSecrets(): Promise<CheckResult | null> {
+  // I-097: surface whether the n8n webhook is authenticated, WITHOUT printing
+  // the secret in full. Only shown when n8n is enabled (otherwise irrelevant).
+  // Values are run through redactSecret so a screenshot/log of `doctor` can't
+  // leak the HMAC secret or Bearer token, while still confirming they're set.
+  const cfg = await loadConfig().catch(() => null);
+  if (!cfg || !cfg.n8n.enabled) return null;
+
+  const hasSecret = !!cfg.n8n.webhookSecret;
+  const hasToken = !!cfg.n8n.authToken;
+  const detail =
+    `webhookSecret=${redactSecret(cfg.n8n.webhookSecret)}, ` +
+    `authToken=${redactSecret(cfg.n8n.authToken)}`;
+  return {
+    label: "n8n webhook auth",
+    ok: hasSecret && hasToken,
+    detail: hasSecret && hasToken
+      ? detail
+      : `${detail} — unset secrets mean unauthenticated endpoints (see README)`,
+  };
+}
+
 async function checkAutoMemoryCost(): Promise<CheckResult> {
   const disabled = process.env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] === "1";
   return {
@@ -211,12 +234,13 @@ export async function doctorCommand(): Promise<void> {
     checkConfig(),
   ]);
 
-  const [obsidian, autoclaw, ollama, bwrap, autoMem] = await Promise.all([
+  const [obsidian, autoclaw, ollama, bwrap, autoMem, webhookSecrets] = await Promise.all([
     checkObsidian(),
     checkAutoclaw(),
     checkOllama(),
     checkBubblewrap(),
     checkAutoMemoryCost(),
+    checkWebhookSecrets(),
   ]);
 
   const results: CheckResult[] = [node, claude, zellij, tmux, ccusage, config, autoclaw];
@@ -224,6 +248,7 @@ export async function doctorCommand(): Promise<void> {
   if (bwrap) results.push(bwrap);
   results.push(autoMem);
   if (obsidian) results.push(obsidian);
+  if (webhookSecrets) results.push(webhookSecrets);
 
   console.log("\nccmux doctor\n");
 

@@ -38,6 +38,48 @@ function resolveObsidianConfig(cfg: ObsidianConfig): ObsidianConfig {
   };
 }
 
+// I-096: `allowInsecureTLS` is a footgun if it applies to arbitrary hosts — a
+// MITM on any non-loopback https endpoint could harvest the Bearer API key.
+// Restrict the escape hatch to loopback only: 127.0.0.0/8, ::1, and "localhost".
+// For any other host we force TLS verification regardless of the flag.
+export function isLoopbackHostname(hostname: string): boolean {
+  // URL hostname strips brackets from IPv6, so "[::1]" arrives as "::1".
+  const h = hostname.toLowerCase();
+  if (h === "localhost" || h === "::1" || h === "[::1]") return true;
+  // IPv4 loopback is the whole 127.0.0.0/8 block, not just 127.0.0.1.
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  return false;
+}
+
+/**
+ * Decide TLS `rejectUnauthorized` for an Obsidian request, plus whether the
+ * insecure flag was *ignored* (so the caller can warn). Pulled out as a pure
+ * function so the policy is unit-testable without opening a socket.
+ *
+ * - Non-https: TLS isn't in play; rejectUnauthorized is moot (returns true).
+ * - https + allowInsecureTLS + loopback host: honour the opt-out (false).
+ * - https + allowInsecureTLS + non-loopback host: IGNORE the flag, force
+ *   verification (true) and flag `insecureIgnored` so a warning is logged.
+ * - https without the flag: verify (true), the default.
+ */
+export function resolveRejectUnauthorized(
+  protocol: string,
+  hostname: string,
+  allowInsecureTLS: boolean | undefined,
+): { rejectUnauthorized: boolean; insecureIgnored: boolean } {
+  if (protocol !== "https:") {
+    return { rejectUnauthorized: true, insecureIgnored: false };
+  }
+  if (!allowInsecureTLS) {
+    return { rejectUnauthorized: true, insecureIgnored: false };
+  }
+  if (isLoopbackHostname(hostname)) {
+    return { rejectUnauthorized: false, insecureIgnored: false };
+  }
+  // Opted in, but not loopback: refuse to disable verification.
+  return { rejectUnauthorized: true, insecureIgnored: true };
+}
+
 // Encode a vault-relative path for the REST API: percent-encode each segment
 // but preserve the `/` separators (encodeURIComponent on the whole string turns
 // them into %2F and breaks the path), and reject `.`/`..`/absolute segments so a
@@ -62,9 +104,21 @@ async function obsidianRequest(
   const url = new URL(`/vault/${encodeVaultPath(vaultRelPath)}`, cfg.baseUrl);
   const body = Buffer.from(content, "utf-8");
 
-  if (cfg.allowInsecureTLS && url.protocol === "https:") {
+  // I-096: confine allowInsecureTLS to loopback hosts. The decision (and whether
+  // the flag was ignored for a non-loopback host) is computed by a pure helper.
+  const { rejectUnauthorized, insecureIgnored } = resolveRejectUnauthorized(
+    url.protocol,
+    url.hostname,
+    cfg.allowInsecureTLS,
+  );
+
+  if (insecureIgnored) {
     console.warn(
-      "[ccmux] obsidian.allowInsecureTLS is enabled — TLS certificate validation is OFF; the API key is exposed to MITM. Prefer NODE_EXTRA_CA_CERTS (see README).",
+      `[ccmux] obsidian.allowInsecureTLS ignored for non-loopback host "${url.hostname}" — TLS verification is enforced to protect the API key. Use NODE_EXTRA_CA_CERTS to trust a cert (see README).`,
+    );
+  } else if (!rejectUnauthorized) {
+    console.warn(
+      "[ccmux] obsidian.allowInsecureTLS is enabled — TLS certificate validation is OFF for this loopback host; the API key is exposed to a local MITM. Prefer NODE_EXTRA_CA_CERTS (see README).",
     );
   }
 
@@ -79,9 +133,10 @@ async function obsidianRequest(
           "Content-Type": "text/markdown",
           "Content-Length": body.length,
         },
-        // Default: verify TLS (rejectUnauthorized defaults to true). Only skip
-        // when the user explicitly opts in via obsidian.allowInsecureTLS.
-        rejectUnauthorized: !cfg.allowInsecureTLS,
+        // I-096: verify TLS unless the user opted into allowInsecureTLS AND the
+        // target is loopback. For non-loopback https this is forced true even
+        // when allowInsecureTLS is set (the flag is ignored + warned above).
+        rejectUnauthorized,
       },
       (res) => {
         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {

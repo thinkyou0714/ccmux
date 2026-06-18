@@ -64,7 +64,10 @@ export NODE_EXTRA_CA_CERTS=/path/to/obsidian-local-rest-api.pem
 
 As a last-resort escape hatch you can set `"obsidian": { "allowInsecureTLS": true }`
 in the config (default `false`). This skips certificate validation and logs a
-warning on every request — only use it on a trusted local network.
+warning on every request — only use it on a trusted local network. For safety it
+**only applies to loopback hosts** (`127.0.0.0/8`, `::1`, `localhost`); for any
+other host TLS verification is enforced regardless and the flag is ignored (with
+a warning), so the API key can't leak to a MITM on a remote Obsidian endpoint.
 
 ## Requirements
 

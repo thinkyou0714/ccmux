@@ -18,7 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        node: [22]
+        # Validate both ends of the supported range (engines: >=22).
+        node: [22, 24]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -30,8 +31,13 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - name: Lockfile lint (registry + integrity + https)
+        run: npx --yes lockfile-lint@4 --path package-lock.json --type npm --validate-https --validate-integrity --allowed-hosts npm
       - name: Audit (production deps, high+)
         run: npm audit --omit=dev --audit-level=high
+      - name: Audit (all deps, moderate+, advisory)
+        run: npm audit --audit-level=moderate
+        continue-on-error: true
       - name: Lint (eslint, warnings allowed)
         run: npm run lint
       - name: Typecheck (src + tests)
@@ -39,9 +45,9 @@ jobs:
       - name: Build (tsc)
         run: npm run build
       - name: Unit tests
-        run: npm test -- --reporter=verbose --exclude "tests/integration/**"
+        run: npm test -- --reporter=verbose --reporter=github-actions --exclude "tests/integration/**"
       - name: Integration tests (mock LLM)
-        run: npm test -- --reporter=verbose tests/integration
+        run: npm test -- --reporter=verbose --reporter=github-actions tests/integration
         # The integration suite spawns a stub HTTP server + drives ccmux auto.
         # Keep it separate so a flaky stub never masks unit failures.
         timeout-minutes: 5

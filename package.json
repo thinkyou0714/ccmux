@@ -3,15 +3,24 @@
   "version": "0.1.0",
   "description": "Claude Code Multiplexer — Zellij × git worktree × n8n × Obsidian",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thinkyou0714/ccmux.git"
+  },
   "bin": {
     "ccmux": "./dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "lint": "eslint src tests",
-    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",

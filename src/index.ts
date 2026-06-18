@@ -15,13 +15,18 @@ import { initCommand } from "./commands/init.js";
 import { dashboardCommand } from "./commands/dashboard.js";
 import { initConfig } from "./config/schema.js";
 import { intArg, validateSessionName } from "./core/args.js";
+import { createRequire } from "module";
+
+// Single source of truth for the version: read package.json at runtime instead
+// of hardcoding it here (the two used to drift on every release bump).
+const { version: pkgVersion } = createRequire(import.meta.url)("../package.json") as { version: string };
 
 const program = new Command();
 
 program
   .name("ccmux")
   .description("Claude Code Multiplexer — Zellij × git worktree × n8n × Obsidian")
-  .version("0.1.0");
+  .version(pkgVersion);
 
 program
   .command("new <name>")

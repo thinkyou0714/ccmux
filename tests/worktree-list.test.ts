@@ -57,7 +57,10 @@ describe("listWorktrees (I-088 — NUL/-z porcelain parsing)", () => {
     expect(list).toHaveLength(1);
     expect(list[0].name).toBe(name);
     expect(list[0].branch).toBe(`ccmux/${name}`);
-    expect(list[0].path).toBe(wt.path);
+    // realpath both sides: git reports the canonical path, but the temp dir is a
+    // symlink on macOS (/var -> /private/var) and uses different separators on
+    // Windows, so a raw string compare is platform-fragile.
+    expect(await fs.realpath(list[0].path)).toBe(await fs.realpath(wt.path));
     expect(list[0].projectPath).toBe(repo);
   });
 
@@ -77,7 +80,7 @@ describe("listWorktrees (I-088 — NUL/-z porcelain parsing)", () => {
     expect(list).toHaveLength(1);
     expect(list[0].branch).toBe(branch);
     expect(list[0].name).toBe("spaced");
-    expect(list[0].path).toBe(spacedPath);
+    expect(await fs.realpath(list[0].path)).toBe(await fs.realpath(spacedPath));
   });
 
   it("ignores the main worktree and detached/non-ccmux worktrees", async () => {

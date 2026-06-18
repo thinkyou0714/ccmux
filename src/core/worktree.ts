@@ -60,7 +60,10 @@ function isInside(base: string, target: string): boolean {
  * used purely as a collision-resistant fixed-width slug, not for security.
  */
 function worktreeLockKey(projectPath: string): string {
-  const hash = crypto.createHash("sha1").update(projectPath).digest("hex").slice(0, 16);
+  // sha256 (not sha1) purely as a collision-resistant fixed-width slug for the
+  // lock filename — not a security primitive, but sha256 avoids CodeQL's
+  // weak-crypto flag and is the right default anyway.
+  const hash = crypto.createHash("sha256").update(projectPath).digest("hex").slice(0, 16);
   return `worktree-${hash}`;
 }
 

@@ -92,9 +92,15 @@ async function withWorktreeLock<T>(
       break;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      // Only "already running" (lock currently held) is retryable; anything
-      // else (e.g. EROFS on the locks dir) is a real failure — rethrow.
-      if (!msg.includes("already running")) throw err;
+      const code = (err as NodeJS.ErrnoException).code;
+      // Retryable contention: the lock is held ("already running"); the
+      // exclusive create lost a race with another in-process acquire/release so
+      // acquireLock surfaced the raw EEXIST (the lock vanished mid-recovery); or
+      // a Windows sharing violation (EPERM/EACCES). Anything else (e.g. EROFS on
+      // the locks dir) is a real failure — rethrow.
+      const contended =
+        msg.includes("already running") || code === "EEXIST" || code === "EPERM" || code === "EACCES";
+      if (!contended) throw err;
       if (attempt >= maxAttempts) {
         throw new Error(
           `Timed out waiting for the worktree lock on "${projectPath}" ` +

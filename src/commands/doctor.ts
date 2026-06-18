@@ -6,6 +6,11 @@ import { loadConfig } from "../config/schema.js";
 import { checkHealth } from "../integrations/autoclaw.js";
 import { ccmuxDir } from "../core/paths.js";
 import { redactSecret } from "../core/redact.js";
+import { jsonOk, printJson } from "../core/json-output.js";
+
+export interface DoctorOptions {
+  json?: boolean;
+}
 
 interface CheckResult {
   label: string;
@@ -224,7 +229,8 @@ async function checkOllama(): Promise<CheckResult | null> {
   }
 }
 
-export async function doctorCommand(): Promise<void> {
+export async function doctorCommand(opts: DoctorOptions = {}): Promise<void> {
+  const isJson = Boolean(opts.json);
   const [node, claude, zellij, tmux, ccusage, config] = await Promise.all([
     checkNodeVersion(),
     checkClaudeCli(),
@@ -250,16 +256,34 @@ export async function doctorCommand(): Promise<void> {
   if (obsidian) results.push(obsidian);
   if (webhookSecrets) results.push(webhookSecrets);
 
-  console.log("\nccmux doctor\n");
+  const criticalFail = results.some((r) => !r.ok && r.required);
 
-  let criticalFail = false;
+  if (isJson) {
+    // Normalize each row to a flat {label, ok, detail, required} shape (detail
+    // defaults to null so the field is always present for consumers).
+    const checks = results.map((r) => ({
+      label: r.label,
+      ok: r.ok,
+      detail: r.detail ?? null,
+      required: Boolean(r.required),
+    }));
+    printJson(
+      jsonOk(
+        { checks, ok: !criticalFail, criticalFail },
+        { command: "doctor" },
+      ),
+    );
+    if (criticalFail) process.exit(1);
+    return;
+  }
+
+  console.log("\nccmux doctor\n");
 
   for (const r of results) {
     const icon = r.ok ? chalk.green("✔") : chalk.red("✘");
     const label = r.ok ? r.label : chalk.red(r.label);
     const detail = r.detail ? chalk.dim(` — ${r.detail}`) : "";
     console.log(`  ${icon}  ${label}${detail}`);
-    if (!r.ok && r.required) criticalFail = true;
   }
 
   console.log();

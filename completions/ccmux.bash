@@ -4,7 +4,7 @@ _ccmux_sessions() {
     let d='';
     process.stdin.on('data',c=>d+=c);
     process.stdin.on('end',()=>{
-      try{JSON.parse(d).forEach(s=>console.log(s.name));}catch{}
+      try{const p=JSON.parse(d);const a=Array.isArray(p)?p:(p.data||[]);a.forEach(s=>console.log(s.name));}catch{}
     });
   "
 }

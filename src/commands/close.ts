@@ -11,6 +11,7 @@ import { loadConfig } from "../config/schema.js";
 import { writeObsidianHandoff, exportSessionForDashboard } from "../integrations/obsidian.js";
 import { completeSession } from "../core/queue.js";
 import { ccmuxDir } from "../core/paths.js";
+import { jsonErr, jsonOk, printJson } from "../core/json-output.js";
 
 export interface CloseOptions {
   force?: boolean;
@@ -19,6 +20,7 @@ export interface CloseOptions {
   // `noHandoff`/`noDashboard`, so the flags were silently ignored.)
   handoff?: boolean;
   dashboard?: boolean;
+  json?: boolean;
 }
 
 async function readClaudeMd(worktreePath: string): Promise<string | undefined> {
@@ -48,28 +50,34 @@ function extractTodos(claudeMdContent: string | undefined): string[] {
 }
 
 export async function closeCommand(name: string, opts: CloseOptions): Promise<void> {
+  const isJson = Boolean(opts.json);
   const cfg = await loadConfig();
   const session = await getSession(name);
 
   if (!session) {
-    console.error(chalk.red(`Session "${name}" not found.`));
+    const msg = `Session "${name}" not found.`;
+    if (isJson) printJson(jsonErr(msg, { command: "close" }));
+    else console.error(chalk.red(msg));
     process.exit(1);
   }
 
-  const spinner = ora(`Closing session "${name}"...`).start();
+  // In --json mode every breadcrumb is collected here and emitted once in the
+  // envelope's `warnings`, instead of dribbling to stdout as dim console.log.
+  const warnings: string[] = [];
+  const spinner = isJson ? null : ora(`Closing session "${name}"...`).start();
 
   try {
     const diff = await getWorktreeDiff(session.worktreePath);
 
-    spinner.text = "Gathering handoff data...";
+    if (spinner) spinner.text = "Gathering handoff data...";
     const claudeMdContent = await readClaudeMd(session.worktreePath);
     const gitLog = await getGitLog(session.worktreePath);
     const todos = extractTodos(claudeMdContent);
 
-    spinner.text = "Closing terminal tab...";
+    if (spinner) spinner.text = "Closing terminal tab...";
     await closeTab(name);
 
-    spinner.text = "Removing worktree...";
+    if (spinner) spinner.text = "Removing worktree...";
     try {
       await deleteWorktree(name, session.projectPath, {
         worktreeBase: cfg.worktreeBase,
@@ -78,8 +86,10 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("uncommitted") && !opts.force) {
-        spinner.warn(chalk.yellow(`Worktree has uncommitted changes. Use --force to override.`));
+        const warn = "Worktree has uncommitted changes. Use --force to override.";
         await updateSession(session.id, { status: "error" });
+        if (isJson) printJson(jsonErr(warn, { command: "close" }));
+        else spinner?.warn(chalk.yellow(warn));
         process.exit(1);
       }
       if (!opts.force) throw err;
@@ -99,12 +109,14 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
         gitLog,
       };
 
-      await writeLocalHandoff(handoffData);
+      const handoffFile = await writeLocalHandoff(handoffData, { quiet: isJson });
+      if (isJson) warnings.push(`handoff saved: ${handoffFile}`);
       if (cfg.obsidian.enabled) {
-        spinner.text = "Writing Obsidian handoff...";
+        if (spinner) spinner.text = "Writing Obsidian handoff...";
         const ok = await writeObsidianHandoff(handoffData, cfg.obsidian);
         if (ok) {
-          console.log(chalk.dim(`  handoff → Obsidian: ${cfg.obsidian.handoffPath}`));
+          if (isJson) warnings.push(`handoff → Obsidian: ${cfg.obsidian.handoffPath}`);
+          else console.log(chalk.dim(`  handoff → Obsidian: ${cfg.obsidian.handoffPath}`));
         }
       }
     }
@@ -144,7 +156,8 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
           ),
         ]);
         if (Date.now() - t0 > 500) {
-          console.log(chalk.dim(`  dashboard refresh: ${Date.now() - t0}ms`));
+          if (isJson) warnings.push(`dashboard refresh: ${Date.now() - t0}ms`);
+          else console.log(chalk.dim(`  dashboard refresh: ${Date.now() - t0}ms`));
         }
       } catch {
         /* silent — auto dashboard is best-effort */
@@ -157,23 +170,46 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
         ? `${sym}${Math.round(session.costUSD * cfg.cost.exchangeRate)}`
         : `${sym}${session.costUSD.toFixed(3)}`;
 
-    spinner.succeed(chalk.green(`Session "${name}" closed`));
+    if (isJson) {
+      printJson(
+        jsonOk(
+          {
+            id: session.id,
+            name: session.name,
+            branch: session.branch,
+            status: "closed" as const,
+            costUSD: session.costUSD,
+            costDisplay: cost,
+            diff: diff || null,
+          },
+          { command: "close", warnings },
+        ),
+      );
+      return;
+    }
+
+    spinner?.succeed(chalk.green(`Session "${name}" closed`));
     console.log(`  total cost: ${cost}`);
     if (diff) console.log(chalk.dim(`\n  diff summary:\n${diff.split("\n").map((l) => "    " + l).join("\n")}`));
   } catch (err: unknown) {
-    spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
+    const msg = String(err instanceof Error ? err.message : err);
+    if (isJson) printJson(jsonErr(msg, { command: "close" }));
+    else spinner?.fail(chalk.red(msg));
     process.exit(1);
   }
 }
 
-export async function writeLocalHandoff(data: {
-  sessionName: string;
-  branch: string;
-  diff: string;
-  claudeMdContent?: string;
-  todos?: string[];
-  gitLog?: string;
-}): Promise<void> {
+export async function writeLocalHandoff(
+  data: {
+    sessionName: string;
+    branch: string;
+    diff: string;
+    claudeMdContent?: string;
+    todos?: string[];
+    gitLog?: string;
+  },
+  opts?: { quiet?: boolean },
+): Promise<string> {
   const dir = path.join(ccmuxDir(), "handoffs");
   await fs.mkdir(dir, { recursive: true });
 
@@ -207,5 +243,6 @@ export async function writeLocalHandoff(data: {
   parts.push(``);
 
   await fs.writeFile(file, parts.join("\n"), "utf-8");
-  console.log(chalk.dim(`  handoff saved: ${file}`));
+  if (!opts?.quiet) console.log(chalk.dim(`  handoff saved: ${file}`));
+  return file;
 }

@@ -6,7 +6,7 @@ _ccmux_sessions() {
     let d='';
     process.stdin.on('data',c=>d+=c);
     process.stdin.on('end',()=>{
-      try{JSON.parse(d).forEach(s=>process.stdout.write(s.name+'\n'));}catch{}
+      try{const p=JSON.parse(d);const a=Array.isArray(p)?p:(p.data||[]);a.forEach(s=>process.stdout.write(s.name+'\n'));}catch{}
     });
   " 2>/dev/null)"})
   compadd "$@" -- $sessions

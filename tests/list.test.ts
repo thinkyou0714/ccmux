@@ -86,9 +86,14 @@ describeListCommand("BL-9 list filtering (--status) — listCommand wrapper", ()
     } finally {
       spy.mockRestore();
     }
+    // I-099: --json now emits the envelope; the session array lives in `data`.
     const parsed = JSON.parse(out);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0].name).toBe("y");
+    expect(parsed.schema_version).toBe("1");
+    expect(parsed.error).toBeNull();
+    expect(Array.isArray(parsed.warnings)).toBe(true);
+    expect(parsed.meta.command).toBe("list");
+    expect(parsed.data).toHaveLength(1);
+    expect(parsed.data[0].name).toBe("y");
   });
 
   it("listCommand --status=closed includes closed sessions (implicit --all)", async () => {
@@ -108,7 +113,29 @@ describeListCommand("BL-9 list filtering (--status) — listCommand wrapper", ()
       spy.mockRestore();
     }
     const parsed = JSON.parse(out);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0].name).toBe("done");
+    expect(parsed.schema_version).toBe("1");
+    expect(parsed.data).toHaveLength(1);
+    expect(parsed.data[0].name).toBe("done");
+  });
+
+  it("--json emits a single newline-terminated envelope line", async () => {
+    await seedSessions([{ name: "solo", status: "busy" }]);
+    const { listCommand } = await import("../src/commands/list.js");
+    let out = "";
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation(((s: string | Uint8Array) => {
+      out += typeof s === "string" ? s : Buffer.from(s).toString("utf-8");
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      await listCommand({ json: true });
+    } finally {
+      spy.mockRestore();
+    }
+    // Exactly one JSON object, newline-terminated, parseable in full.
+    expect(out.endsWith("\n")).toBe(true);
+    expect(out.trim().split("\n")).toHaveLength(1);
+    const parsed = JSON.parse(out);
+    expect(parsed.schema_version).toBe("1");
+    expect(parsed.data.map((s: { name: string }) => s.name)).toEqual(["solo"]);
   });
 });

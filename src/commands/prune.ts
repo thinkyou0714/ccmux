@@ -3,14 +3,17 @@ import ora from "ora";
 import { pruneOrphanedSessions, listSessions, updateSession } from "../core/session.js";
 import { deleteWorktree } from "../core/worktree.js";
 import { loadConfig } from "../config/schema.js";
+import { jsonErr, jsonOk, printJson } from "../core/json-output.js";
 
 export interface PruneOptions {
   dryRun?: boolean;
   force?: boolean;
+  json?: boolean;
 }
 
 export async function pruneCommand(opts: PruneOptions): Promise<void> {
-  const spinner = ora("Scanning for orphaned sessions...").start();
+  const isJson = Boolean(opts.json);
+  const spinner = isJson ? null : ora("Scanning for orphaned sessions...").start();
 
   try {
     await pruneOrphanedSessions();
@@ -18,27 +21,47 @@ export async function pruneCommand(opts: PruneOptions): Promise<void> {
     const sessions = await listSessions();
     const orphaned = sessions.filter((s) => s.status === "orphaned");
 
-    spinner.stop();
+    spinner?.stop();
+
+    const candidates = orphaned.map((s) => ({ name: s.name, worktreePath: s.worktreePath }));
 
     if (orphaned.length === 0) {
-      console.log(chalk.green("No orphaned sessions found."));
+      if (isJson) {
+        printJson(
+          jsonOk({ removed: 0, candidates, skipped: [], dryRun: Boolean(opts.dryRun) }, { command: "prune" }),
+        );
+      } else {
+        console.log(chalk.green("No orphaned sessions found."));
+      }
       return;
     }
 
-    console.log(`\nFound ${orphaned.length} orphaned session(s):\n`);
-
-    for (const s of orphaned) {
-      console.log(`  ${chalk.yellow(s.name.padEnd(20))} ${chalk.dim(s.worktreePath)}`);
-    }
-
     if (opts.dryRun) {
+      if (isJson) {
+        printJson(
+          jsonOk({ removed: 0, candidates, skipped: [], dryRun: true }, { command: "prune" }),
+        );
+        return;
+      }
+      console.log(`\nFound ${orphaned.length} orphaned session(s):\n`);
+      for (const s of orphaned) {
+        console.log(`  ${chalk.yellow(s.name.padEnd(20))} ${chalk.dim(s.worktreePath)}`);
+      }
       console.log(chalk.dim(`\n  (dry run — no changes made)`));
       return;
     }
 
-    console.log();
-    const removeSpinner = ora("Removing orphaned worktrees...").start();
+    if (!isJson) {
+      console.log(`\nFound ${orphaned.length} orphaned session(s):\n`);
+      for (const s of orphaned) {
+        console.log(`  ${chalk.yellow(s.name.padEnd(20))} ${chalk.dim(s.worktreePath)}`);
+      }
+      console.log();
+    }
+
+    const removeSpinner = isJson ? null : ora("Removing orphaned worktrees...").start();
     let removed = 0;
+    const skipped: { name: string; reason: string }[] = [];
     const cfg = await loadConfig();
 
     for (const s of orphaned) {
@@ -52,14 +75,29 @@ export async function pruneCommand(opts: PruneOptions): Promise<void> {
         removed++;
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        removeSpinner.warn(chalk.yellow(`  Skipped "${s.name}": ${msg}`));
-        removeSpinner.start();
+        skipped.push({ name: s.name, reason: msg });
+        if (removeSpinner) {
+          removeSpinner.warn(chalk.yellow(`  Skipped "${s.name}": ${msg}`));
+          removeSpinner.start();
+        }
       }
     }
 
-    removeSpinner.succeed(chalk.green(`Pruned ${removed} orphaned session(s).`));
+    if (isJson) {
+      printJson(
+        jsonOk(
+          { removed, candidates, skipped, dryRun: false },
+          { command: "prune", warnings: skipped.map((s) => `Skipped "${s.name}": ${s.reason}`) },
+        ),
+      );
+      return;
+    }
+
+    removeSpinner?.succeed(chalk.green(`Pruned ${removed} orphaned session(s).`));
   } catch (err: unknown) {
-    spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
+    const msg = String(err instanceof Error ? err.message : err);
+    if (isJson) printJson(jsonErr(msg, { command: "prune" }));
+    else spinner?.fail(chalk.red(msg));
     process.exit(1);
   }
 }

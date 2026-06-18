@@ -2,6 +2,7 @@ import chalk from "chalk";
 import { listSessions, pruneOrphanedSessions, type Session } from "../core/session.js";
 import { loadConfig } from "../config/schema.js";
 import { getTodayCost, formatCost } from "../core/cost.js";
+import { jsonOk, printJson } from "../core/json-output.js";
 
 export interface ListOptions {
   all?: boolean;
@@ -57,7 +58,10 @@ export async function listCommand(opts: ListOptions): Promise<void> {
   const todayCost = await getTodayCost();
 
   if (opts.json) {
-    process.stdout.write(JSON.stringify(sessions, null, 2) + "\n");
+    // I-099: envelope-wrap the array. Breaking vs the old bare-array form, but
+    // 0.1.0 — and the shell completions read `.data` accordingly.
+    const warnings = pruned > 0 ? [`${pruned} orphaned session(s) detected and marked`] : [];
+    printJson(jsonOk(sessions, { command: "list", warnings }));
     return;
   }
 

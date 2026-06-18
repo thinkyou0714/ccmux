@@ -193,6 +193,9 @@ export async function initConfig(): Promise<void> {
     await fs.access(configFile());
   } catch {
     await saveConfig(DEFAULTS);
-    console.log(`Created config at ${configFile()}`);
+    // stderr, not stdout: this is an informational bootstrap notice, and routing
+    // it to stdout would pollute the single-envelope contract of `--json`
+    // commands on their first run (I-099).
+    console.error(`Created config at ${configFile()}`);
   }
 }

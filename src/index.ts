@@ -33,7 +33,8 @@ program
   .description("Create a new CC session (worktree + Zellij tab + Claude Code)")
   .option("-p, --project <key>", "Project key from config (default: defaultProject)")
   .option("-l, --llm <backend>", "LLM backend: claude | autoclaw", "claude")
-  .action(async (name: string, opts: { project?: string; llm?: "claude" | "autoclaw" }) => {
+  .option("-j, --json", "Output as JSON")
+  .action(async (name: string, opts: { project?: string; llm?: "claude" | "autoclaw"; json?: boolean }) => {
     validateSessionName(name);
     await initConfig();
     await newCommand(name, opts);
@@ -58,7 +59,8 @@ program
   .option("-f, --force", "Force close even with uncommitted changes")
   .option("--no-handoff", "Skip writing the handoff note")
   .option("--no-dashboard", "Skip the automatic Obsidian dashboard refresh (BL-7)")
-  .action(async (name: string, opts: { force?: boolean; handoff?: boolean; dashboard?: boolean }) => {
+  .option("-j, --json", "Output as JSON")
+  .action(async (name: string, opts: { force?: boolean; handoff?: boolean; dashboard?: boolean; json?: boolean }) => {
     validateSessionName(name);
     await initConfig();
     await closeCommand(name, opts);
@@ -112,8 +114,9 @@ program
 program
   .command("doctor")
   .description("Check dependencies and configuration")
-  .action(async () => {
-    await doctorCommand();
+  .option("-j, --json", "Output as JSON")
+  .action(async (opts: { json?: boolean }) => {
+    await doctorCommand(opts);
   });
 
 program
@@ -121,7 +124,8 @@ program
   .description("Remove orphaned sessions and worktrees")
   .option("--dry-run", "Show what would be removed without deleting")
   .option("-f, --force", "Force remove even with uncommitted changes")
-  .action(async (opts: { dryRun?: boolean; force?: boolean }) => {
+  .option("-j, --json", "Output as JSON")
+  .action(async (opts: { dryRun?: boolean; force?: boolean; json?: boolean }) => {
     await initConfig();
     await pruneCommand(opts);
   });

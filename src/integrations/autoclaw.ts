@@ -2,6 +2,14 @@ import http from "http";
 import https from "https";
 import { loadConfig, CcmuxConfig } from "../config/schema.js";
 
+/**
+ * I-081: hard cap on the response body {@link routeTask} will buffer. autoclaw's
+ * reply is a tiny JSON object; this only guards against a buggy/hostile upstream
+ * streaming an unbounded body into memory. 1 MiB is generously above any
+ * legitimate `{task_id}` payload.
+ */
+const MAX_RESPONSE_BYTES = 1024 * 1024;
+
 export interface AutoclawHealth {
   available: boolean;
   url: string;
@@ -155,6 +163,8 @@ export async function routeTask(prompt: string): Promise<{ taskId: string }> {
 
   const body = JSON.stringify({ prompt });
   return new Promise((resolve, reject) => {
+    // Set once we abort on overflow so the subsequent socket 'error' is ignored.
+    let aborted = false;
     const options: http.RequestOptions = {
       hostname: url.hostname,
       port: url.port ? Number(url.port) : undefined,
@@ -172,10 +182,28 @@ export async function routeTask(prompt: string): Promise<{ taskId: string }> {
     // and the default port would be wrong).
     const lib = url.protocol === "https:" ? https : http;
     const req = lib.request(options, (res) => {
-      let data = "";
-      res.on("data", (chunk: Buffer) => { data += chunk.toString(); });
+      // I-081: bound the response we buffer. autoclaw should reply with a tiny
+      // JSON `{task_id}`; an unbounded `data += chunk` lets a buggy/hostile
+      // upstream stream us out of memory. Collect Buffers (not strings) so the
+      // size check is exact and we decode once at the end — concatenating
+      // per-chunk strings could split a multi-byte UTF-8 sequence.
+      const chunks: Buffer[] = [];
+      let received = 0;
+      res.on("data", (chunk: Buffer) => {
+        if (aborted) return;
+        received += chunk.length;
+        if (received > MAX_RESPONSE_BYTES) {
+          aborted = true;
+          req.destroy();
+          reject(new Error(`autoclaw response exceeded ${MAX_RESPONSE_BYTES} bytes`));
+          return;
+        }
+        chunks.push(chunk);
+      });
       res.on("end", () => {
+        if (aborted) return;
         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+          const data = Buffer.concat(chunks).toString("utf-8");
           try {
             const parsed = JSON.parse(data) as { task_id?: string; id?: string };
             resolve({ taskId: parsed.task_id ?? parsed.id ?? "unknown" });
@@ -190,7 +218,12 @@ export async function routeTask(prompt: string): Promise<{ taskId: string }> {
       });
     });
 
-    req.on("error", reject);
+    req.on("error", (err) => {
+      // After we req.destroy() on overflow the socket emits an error; we've
+      // already rejected with the meaningful message, so swallow this one.
+      if (aborted) return;
+      reject(err);
+    });
     req.on("timeout", () => { req.destroy(); reject(new Error("autoclaw request timed out")); });
     req.write(body);
     req.end();

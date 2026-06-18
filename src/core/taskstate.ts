@@ -42,7 +42,33 @@ export async function writeTaskState(worktreePath: string, state: TaskState): Pr
       : ["_(none planned)_"]),
     ``,
   ];
-  await fs.writeFile(file, lines.join("\n"), "utf-8");
+  // I-085: atomic write. The loop daemon rewrites this file every iteration and
+  // it is the agent's single source of truth, so a crash mid-write must not
+  // leave a truncated/corrupt TASK_STATE.md. Write to a sibling tmp file,
+  // fsync it to disk, then rename() it into place — rename is atomic on POSIX
+  // (and replaces atomically on Windows), so a reader sees either the old file
+  // or the fully-written new one, never a partial.
+  const tmp = path.join(
+    worktreePath,
+    `.TASK_STATE.md.tmp-${process.pid}-${Date.now().toString(36)}`
+  );
+  const data = lines.join("\n");
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(tmp, "w");
+    await handle.writeFile(data, "utf-8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await fs.rename(tmp, file);
+  } catch (err) {
+    // Best-effort cleanup of the tmp file so a failed write doesn't litter the
+    // worktree. Ignore errors here (e.g. handle already closed / tmp absent);
+    // the original write error is what matters.
+    if (handle) await handle.close().catch(() => {});
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 export async function readTaskState(worktreePath: string): Promise<TaskState | undefined> {
@@ -55,20 +81,55 @@ export async function readTaskState(worktreePath: string): Promise<TaskState | u
   }
 }
 
+/**
+ * Parse the TASK_STATE.md serialisation produced by {@link writeTaskState}.
+ *
+ * I-086: robust against corrupt/partial input. Rather than returning plausible
+ * but wrong data (e.g. a `slice(start+2)` when `## Goal` is absent, which silently
+ * grabbed the wrong lines), this throws on any input that doesn't have the
+ * required structure. {@link readTaskState} catches the throw and returns
+ * `undefined`, which callers already treat as "no valid state" — failing safe
+ * instead of acting on garbage. The on-disk format is unchanged; this only
+ * hardens the read path (hooks.ts's bash regexes are unaffected).
+ */
 function parseTaskState(content: string): TaskState {
   const lines = content.split("\n");
 
-  const get = (prefix: string): string =>
-    (lines.find((l) => l.startsWith(`- **${prefix}**:`)) ?? "")
-      .replace(new RegExp(`^- \\*\\*${prefix}\\*\\*:\\s*`), "")
-      .trim();
+  // Required marker — without it this isn't a TASK_STATE document at all.
+  if (!lines.some((l) => l.trim() === "# TASK_STATE")) {
+    throw new Error("TASK_STATE.md: missing '# TASK_STATE' header");
+  }
 
-  const iterStr = get("Iteration");
-  const [iterCur, iterMax] = iterStr.split("/").map((s) => parseInt(s.trim(), 10));
+  /** Read a required `- **Key**: value` field; throw if absent. */
+  const getRequired = (prefix: string): string => {
+    const line = lines.find((l) => l.startsWith(`- **${prefix}**:`));
+    if (line === undefined) {
+      throw new Error(`TASK_STATE.md: missing required field '**${prefix}**'`);
+    }
+    return line.replace(new RegExp(`^- \\*\\*${prefix}\\*\\*:\\s*`), "").trim();
+  };
+
+  const iterStr = getRequired("Iteration");
+  const [iterCurRaw, iterMaxRaw] = iterStr.split("/").map((s) => s.trim());
+  const iterCur = Number.parseInt(iterCurRaw ?? "", 10);
+  const iterMax = Number.parseInt(iterMaxRaw ?? "", 10);
+  // A non-numeric iteration means the file is corrupt; don't silently default
+  // to 0/50 and let the loop daemon mis-count.
+  if (Number.isNaN(iterCur) || Number.isNaN(iterMax)) {
+    throw new Error(`TASK_STATE.md: non-numeric Iteration '${iterStr}'`);
+  }
+
+  const statusRaw = getRequired("Status");
+  if (statusRaw !== "running" && statusRaw !== "complete" && statusRaw !== "failed") {
+    throw new Error(`TASK_STATE.md: invalid Status '${statusRaw}'`);
+  }
+  const status: TaskState["status"] = statusRaw;
 
   const section = (header: string): string[] => {
     const start = lines.findIndex((l) => l.trim() === `## ${header}`);
-    if (start === -1) return [];
+    if (start === -1) {
+      throw new Error(`TASK_STATE.md: missing required section '## ${header}'`);
+    }
     const end = lines.findIndex((l, i) => i > start + 1 && l.startsWith("## "));
     const slice = end === -1 ? lines.slice(start + 1) : lines.slice(start + 1, end);
     return slice
@@ -77,19 +138,27 @@ function parseTaskState(content: string): TaskState {
   };
 
   const goalStart = lines.findIndex((l) => l.trim() === "## Goal");
+  if (goalStart === -1) {
+    throw new Error("TASK_STATE.md: missing required section '## Goal'");
+  }
   const goalEnd = lines.findIndex((l, i) => i > goalStart + 1 && l.startsWith("## "));
   const goalLines = goalEnd === -1 ? lines.slice(goalStart + 2) : lines.slice(goalStart + 2, goalEnd);
   const goal = goalLines.filter((l) => l.trim() && !l.startsWith("#")).join("\n").trim();
 
+  // section() throws if either steps section is absent, keeping the required-
+  // structure contract symmetric for Goal / Completed Steps / Next Steps.
+  const completedSteps = section("Completed Steps");
+  const nextSteps = section("Next Steps");
+
   return {
-    sessionName: get("Session"),
+    sessionName: getRequired("Session"),
     goal,
-    iteration: isNaN(iterCur) ? 0 : iterCur,
-    maxIterations: isNaN(iterMax) ? 50 : iterMax,
-    status: (get("Status") as TaskState["status"]) || "running",
-    completedSteps: section("Completed Steps"),
-    nextSteps: section("Next Steps"),
-    lastUpdated: get("Last Updated"),
+    iteration: iterCur,
+    maxIterations: iterMax,
+    status,
+    completedSteps,
+    nextSteps,
+    lastUpdated: getRequired("Last Updated"),
   };
 }
 

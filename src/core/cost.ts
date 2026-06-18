@@ -1,4 +1,5 @@
 import { execa } from "execa";
+import { readFileSync } from "fs";
 
 interface DailyEntry {
   date: string;
@@ -26,15 +27,24 @@ export interface DailyCostSummary {
 let _cache: { data: CcusageJson; fetchedAt: number } | null = null;
 const CACHE_TTL_MS = 60_000;
 
-function resolveClaudeConfigDir(): string | undefined {
-  // WSL2: Claude Code data lives under the Windows user profile, not the WSL home.
-  const winUser = process.env.WINDOWS_USERNAME ?? process.env.USER ?? "Rikuto";
-  const candidate = `/mnt/c/Users/${winUser}/.claude`;
-  // Use it only when it looks like WSL2 (no Windows path separators in HOME)
-  if (process.env.HOME && !process.env.HOME.includes(":\\")) {
-    return process.env.CLAUDE_CONFIG_DIR ?? candidate;
+/** True when running under WSL (Claude Code data then lives on the Windows side). */
+function isWSL(): boolean {
+  if (process.env.WSL_DISTRO_NAME) return true;
+  try {
+    return readFileSync("/proc/version", "utf-8").toLowerCase().includes("microsoft");
+  } catch {
+    return false;
   }
-  return process.env.CLAUDE_CONFIG_DIR;
+}
+
+function resolveClaudeConfigDir(): string | undefined {
+  // Explicit override always wins.
+  if (process.env.CLAUDE_CONFIG_DIR) return process.env.CLAUDE_CONFIG_DIR;
+  // WSL2: Claude Code data lives under the Windows user profile, not the WSL
+  // home. Derive the Windows user from the environment — never guess a name.
+  const winUser = process.env.WINDOWS_USERNAME ?? process.env.USER;
+  if (isWSL() && winUser) return `/mnt/c/Users/${winUser}/.claude`;
+  return undefined;
 }
 
 async function fetchCcusage(): Promise<CcusageJson | null> {
@@ -45,7 +55,7 @@ async function fetchCcusage(): Promise<CcusageJson | null> {
     const env: Record<string, string> = { ...process.env as Record<string, string> };
     const configDir = resolveClaudeConfigDir();
     if (configDir) env["CLAUDE_CONFIG_DIR"] = configDir;
-    const { stdout } = await execa("npx", ["ccusage", "--json"], { stdio: "pipe", env });
+    const { stdout } = await execa("npx", ["ccusage", "--json"], { stdio: "pipe", env, timeout: 15_000 });
     const data = JSON.parse(stdout) as CcusageJson;
     _cache = { data, fetchedAt: Date.now() };
     return data;
@@ -60,10 +70,22 @@ async function fetchCcusage(): Promise<CcusageJson | null> {
  * costs in zones ahead of UTC (e.g. Asia/Tokyo 09:00-23:59 -> next day).
  * Override the zone via CCMUX_TIMEZONE; falls back to the system zone.
  */
+let _warnedBadTz = false;
 export function localToday(now: Date = new Date()): string {
   const timeZone = process.env.CCMUX_TIMEZONE || undefined;
-  // en-CA renders as YYYY-MM-DD.
-  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  const opts = { year: "numeric", month: "2-digit", day: "2-digit" } as const;
+  try {
+    // en-CA renders as YYYY-MM-DD.
+    return new Intl.DateTimeFormat("en-CA", { timeZone, ...opts }).format(now);
+  } catch {
+    // Invalid CCMUX_TIMEZONE — fall back to the system zone instead of crashing
+    // every cost lookup (and dashboard/list that depend on it).
+    if (timeZone && !_warnedBadTz) {
+      _warnedBadTz = true;
+      console.error(`ccmux: invalid CCMUX_TIMEZONE "${timeZone}" — using system zone`);
+    }
+    return new Intl.DateTimeFormat("en-CA", opts).format(now);
+  }
 }
 
 export async function getTodayCost(): Promise<DailyCostSummary | null> {
@@ -83,7 +105,10 @@ export async function getTodayCost(): Promise<DailyCostSummary | null> {
 export async function getRecentCost(days = 7): Promise<DailyCostSummary[]> {
   const data = await fetchCcusage();
   if (!data) return [];
-  return data.daily
+  // Don't assume ccusage returns entries in date order — sort before taking the
+  // most recent N so "recent" is always the actual latest days.
+  return [...data.daily]
+    .sort((a, b) => a.date.localeCompare(b.date))
     .slice(-days)
     .map((d) => ({
       date: d.date,

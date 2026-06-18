@@ -25,6 +25,14 @@ export async function acquireLock(name: string): Promise<void> {
     try {
       const existing = await fs.readFile(lp, "utf-8");
       const pid = parseInt(existing, 10);
+      if (!Number.isInteger(pid)) {
+        // Corrupt/empty lock (e.g. a crash mid-write). Treat as stale and take
+        // it over — otherwise `process.kill(NaN, 0)` throws ERR_OUT_OF_RANGE
+        // (not ESRCH) and the bad lock blocks the session name forever.
+        await fs.unlink(lp).catch(() => {});
+        await fs.writeFile(lp, String(process.pid), { flag: "wx", mode: 0o600 });
+        return;
+      }
       try {
         process.kill(pid, 0);
         throw new Error(`Session "${name}" is already running (PID: ${pid})`);

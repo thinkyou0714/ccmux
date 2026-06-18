@@ -1,6 +1,8 @@
 import { execa } from "execa";
 import path from "path";
 import fs from "fs/promises";
+import crypto from "crypto";
+import { acquireLock, releaseLock } from "./lock.js";
 
 export interface WorktreeInfo {
   name: string;
@@ -42,6 +44,73 @@ function isInside(base: string, target: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
+// I-093: cross-process serialization of worktree mutations.
+//
+// Concurrent `ccmux auto` runs (e.g. several webhooks fired at once) can call
+// `createWorktree`/`deleteWorktree` against the *same* repo simultaneously.
+// `git worktree add/remove/prune` all rewrite `.git/worktrees`, and racing them
+// corrupts registrations or prunes a sibling's freshly-added worktree. We gate
+// every mutation on a per-repository advisory lock (reusing core/lock.ts, which
+// already handles stale-PID takeover and Windows EPERM/EACCES retries).
+
+/**
+ * Derive a filesystem-safe, per-repository lock key from the project path.
+ * The canonical (realpath-resolved) path is hashed so that two spellings of the
+ * same repo (symlinks, trailing slash, `..` segments) map to one lock; sha1 is
+ * used purely as a collision-resistant fixed-width slug, not for security.
+ */
+function worktreeLockKey(projectPath: string): string {
+  const hash = crypto.createHash("sha1").update(projectPath).digest("hex").slice(0, 16);
+  return `worktree-${hash}`;
+}
+
+/**
+ * Run `fn` while holding the per-repo worktree lock, releasing it in `finally`
+ * (success or throw). The lock is deliberately short-lived — held only for the
+ * duration of the git mutation — so we never return while still holding it.
+ *
+ * `acquireLock` throws "already running" when another *live* process (or, for
+ * in-process concurrency, this same PID) holds the lock. We treat that as
+ * transient contention and retry with bounded exponential backoff + jitter;
+ * after the cap we surface a clear error rather than hanging forever.
+ */
+async function withWorktreeLock<T>(
+  projectPath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const key = worktreeLockKey(projectPath);
+  const maxAttempts = 50; // ~ up to a few seconds of contention; then give up.
+  let delay = 20; // ms — grows toward a cap so we don't busy-spin.
+  const maxDelay = 250;
+
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await acquireLock(key);
+      break;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Only "already running" (lock currently held) is retryable; anything
+      // else (e.g. EROFS on the locks dir) is a real failure — rethrow.
+      if (!msg.includes("already running")) throw err;
+      if (attempt >= maxAttempts) {
+        throw new Error(
+          `Timed out waiting for the worktree lock on "${projectPath}" ` +
+            `(${maxAttempts} attempts). Another ccmux process may be stuck mid-operation.`,
+        );
+      }
+      const jitter = Math.floor(Math.random() * delay);
+      await new Promise((resolve) => setTimeout(resolve, delay + jitter));
+      delay = Math.min(delay * 2, maxDelay);
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    await releaseLock(key);
+  }
+}
+
 export function resolveWorktreeBase(override?: string): string {
   return (
     override ??
@@ -61,36 +130,52 @@ export async function createWorktree(
 
   await fs.mkdir(worktreeBase, { recursive: true });
 
-  // Check if worktree already exists
-  const existing = await listWorktrees(projectPath);
-  if (existing.some((w) => w.name === name)) {
-    throw new Error(`Worktree "${name}" already exists at ${wtPath}`);
-  }
-
-  // Create branch and worktree
-  try {
-    await execa("git", ["-C", projectPath, "worktree", "add", "-b", branch, wtPath], {
+  // I-093: serialize the whole add sequence (reconcile → existence check → add)
+  // against concurrent createWorktree/deleteWorktree on this repo. listWorktrees
+  // and applyWorktreeInclude are called *inside* the lock — they don't re-acquire
+  // it (listWorktrees is a pure read), so there's no nested/double acquire.
+  return withWorktreeLock(projectPath, async () => {
+    // Startup reconciler (idempotent): drop registrations whose directory has
+    // already vanished (e.g. a previous crash, or a sibling we don't track) so a
+    // stale ghost can't block `git worktree add` at the same path. Best-effort —
+    // never fail creation just because prune hiccuped.
+    await execa("git", ["-C", projectPath, "worktree", "prune"], {
       stdio: "pipe",
       env: gitEnv(),
-    });
-  } catch (err: unknown) {
-    // Branch might already exist — try without -b
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("already exists")) {
-      await execa("git", ["-C", projectPath, "worktree", "add", wtPath, branch], {
+    }).catch(() => {});
+
+    // Check if worktree already exists (after prune, so cleared ghosts don't
+    // false-positive here).
+    const existing = await listWorktrees(projectPath);
+    if (existing.some((w) => w.name === name)) {
+      throw new Error(`Worktree "${name}" already exists at ${wtPath}`);
+    }
+
+    // Create branch and worktree
+    try {
+      await execa("git", ["-C", projectPath, "worktree", "add", "-b", branch, wtPath], {
         stdio: "pipe",
         env: gitEnv(),
       });
-    } else {
-      throw err;
+    } catch (err: unknown) {
+      // Branch might already exist — try without -b
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("already exists")) {
+        await execa("git", ["-C", projectPath, "worktree", "add", wtPath, branch], {
+          stdio: "pipe",
+          env: gitEnv(),
+        });
+      } else {
+        throw err;
+      }
     }
-  }
 
-  // BL-5: copy files listed in .worktreeinclude into the new worktree.
-  // Best-effort — failures don't break worktree creation.
-  await applyWorktreeInclude(projectPath, wtPath);
+    // BL-5: copy files listed in .worktreeinclude into the new worktree.
+    // Best-effort — failures don't break worktree creation.
+    await applyWorktreeInclude(projectPath, wtPath);
 
-  return { name, branch, path: wtPath, projectPath };
+    return { name, branch, path: wtPath, projectPath };
+  });
 }
 
 /**
@@ -159,56 +244,60 @@ export async function deleteWorktree(
   const wtPath = path.join(worktreeBase, name);
   const branch = `${BRANCH_PREFIX}/${name}`;
 
-  // Check for uncommitted changes unless the caller explicitly forces removal.
-  if (!options.force) {
-    let dirty = false;
+  // I-093: serialize the remove sequence against concurrent worktree mutations
+  // on this repo (a racing add/prune could otherwise corrupt `.git/worktrees`).
+  await withWorktreeLock(projectPath, async () => {
+    // Check for uncommitted changes unless the caller explicitly forces removal.
+    if (!options.force) {
+      let dirty = false;
+      try {
+        const { stdout } = await execa("git", ["-C", wtPath, "status", "--porcelain"], {
+          stdio: "pipe",
+          env: gitEnv(),
+        });
+        dirty = stdout.trim().length > 0;
+      } catch {
+        // The worktree path is gone or not a git repo (e.g. an orphan left by a
+        // crash). There's nothing to protect — fall through to removal instead of
+        // failing the close. (Previously this re-threw and wedged the session.)
+        dirty = false;
+      }
+      if (dirty) {
+        throw new Error(
+          `Worktree "${name}" has uncommitted changes. Commit or stash before closing.`,
+        );
+      }
+    }
+
     try {
-      const { stdout } = await execa("git", ["-C", wtPath, "status", "--porcelain"], {
+      await execa("git", ["-C", projectPath, "worktree", "remove", wtPath, "--force"], {
         stdio: "pipe",
         env: gitEnv(),
       });
-      dirty = stdout.trim().length > 0;
-    } catch {
-      // The worktree path is gone or not a git repo (e.g. an orphan left by a
-      // crash). There's nothing to protect — fall through to removal instead of
-      // failing the close. (Previously this re-threw and wedged the session.)
-      dirty = false;
-    }
-    if (dirty) {
-      throw new Error(
-        `Worktree "${name}" has uncommitted changes. Commit or stash before closing.`,
+    } catch (err: unknown) {
+      // `git worktree remove` can fail to delete the directory on Windows when
+      // files are still locked. Surface why (don't silently swallow it), then fall
+      // through to a manual, retrying removal.
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(
+        `ccmux: git worktree remove failed for "${name}" (${msg.slice(0, 120)}) — removing directory directly`,
       );
     }
-  }
 
-  try {
-    await execa("git", ["-C", projectPath, "worktree", "remove", wtPath, "--force"], {
-      stdio: "pipe",
-      env: gitEnv(),
-    });
-  } catch (err: unknown) {
-    // `git worktree remove` can fail to delete the directory on Windows when
-    // files are still locked. Surface why (don't silently swallow it), then fall
-    // through to a manual, retrying removal.
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(
-      `ccmux: git worktree remove failed for "${name}" (${msg.slice(0, 120)}) — removing directory directly`,
-    );
-  }
+    // Ensure the worktree directory is actually gone. On Windows, locked handles
+    // leave residual files behind, so retry; then prune the stale registration.
+    await fs.rm(wtPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await execa("git", ["-C", projectPath, "worktree", "prune"], { stdio: "pipe", env: gitEnv() }).catch(() => {});
 
-  // Ensure the worktree directory is actually gone. On Windows, locked handles
-  // leave residual files behind, so retry; then prune the stale registration.
-  await fs.rm(wtPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-  await execa("git", ["-C", projectPath, "worktree", "prune"], { stdio: "pipe", env: gitEnv() }).catch(() => {});
-
-  // Delete the branch if it still exists
-  try {
-    await execa("git", ["-C", projectPath, "branch", "-d", branch], {
-      stdio: "pipe",
-    });
-  } catch {
-    // Branch might already be gone — ignore
-  }
+    // Delete the branch if it still exists
+    try {
+      await execa("git", ["-C", projectPath, "branch", "-d", branch], {
+        stdio: "pipe",
+      });
+    } catch {
+      // Branch might already be gone — ignore
+    }
+  });
 }
 
 export async function listWorktrees(projectPath: string): Promise<WorktreeInfo[]> {

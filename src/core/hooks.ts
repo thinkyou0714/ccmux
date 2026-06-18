@@ -65,6 +65,12 @@ async function writeStopHook(
   // Posix path for in-script use.
   const wtPosix = worktreePath.replace(/\\/g, "/");
 
+  // Keep the circuit-breaker log OUTSIDE the worktree so the agent (whose writes
+  // the PreToolUse hook confines to the worktree) can't erase its own fire
+  // history to defeat the deadlock breaker.
+  const circuitBase = process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
+  const circuitFile = path.join(circuitBase, "circuit", `${sessionName}.log`).replace(/\\/g, "/");
+
   const script = `#!/usr/bin/env bash
 # ccmux Stop hook — checks TASK_STATE.md before allowing Claude to exit.
 # Re-read on every stop attempt; guards infinite loops via stop_hook_active.
@@ -72,7 +78,7 @@ async function writeStopHook(
 set -uo pipefail
 
 TASK_STATE_FILE="${wtPosix}/TASK_STATE.md"
-CIRCUIT_FILE="${wtPosix}/.ccmux-circuit.log"
+CIRCUIT_FILE="${circuitFile}"
 CIRCUIT_FIRES="$\{CCMUX_CIRCUIT_FIRES:-5}"
 CIRCUIT_WINDOW_SEC="$\{CCMUX_CIRCUIT_WINDOW_SEC:-60}"
 

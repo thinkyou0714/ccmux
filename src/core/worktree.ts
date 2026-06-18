@@ -29,6 +29,19 @@ export interface DeleteWorktreeOptions extends CreateWorktreeOptions {
 
 const BRANCH_PREFIX = "ccmux";
 
+// Run git with a fixed locale so we can reliably match its messages (e.g.
+// "already exists") regardless of the user's LANG/LC_ALL, and never block on an
+// interactive credential prompt.
+function gitEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, LC_ALL: "C", GIT_TERMINAL_PROMPT: "0" };
+}
+
+/** True when `target` resolves to `base` or a path inside it (traversal guard). */
+function isInside(base: string, target: string): boolean {
+  const rel = path.relative(path.resolve(base), path.resolve(target));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
 export function resolveWorktreeBase(override?: string): string {
   return (
     override ??
@@ -58,6 +71,7 @@ export async function createWorktree(
   try {
     await execa("git", ["-C", projectPath, "worktree", "add", "-b", branch, wtPath], {
       stdio: "pipe",
+      env: gitEnv(),
     });
   } catch (err: unknown) {
     // Branch might already exist — try without -b
@@ -65,6 +79,7 @@ export async function createWorktree(
     if (msg.includes("already exists")) {
       await execa("git", ["-C", projectPath, "worktree", "add", wtPath, branch], {
         stdio: "pipe",
+        env: gitEnv(),
       });
     } else {
       throw err;
@@ -107,8 +122,18 @@ export async function applyWorktreeInclude(
     .filter((l) => l.length > 0 && !l.startsWith("#"));
 
   for (const rel of entries) {
-    const src = path.join(projectPath, rel);
-    const dst = path.join(wtPath, rel);
+    const src = path.resolve(projectPath, rel);
+    const dst = path.resolve(wtPath, rel);
+    // Confine both endpoints to their base dirs — a `.worktreeinclude` line like
+    // `../../.ssh/id_rsa` must not read outside the project or write outside the
+    // worktree (zip-slip / path traversal).
+    if (!isInside(projectPath, src) || !isInside(wtPath, dst)) {
+      result.missing.push(rel);
+      process.stderr.write(
+        `ccmux: .worktreeinclude — refusing path outside project/worktree: "${rel}"\n`,
+      );
+      continue;
+    }
     try {
       await fs.mkdir(path.dirname(dst), { recursive: true });
       await fs.copyFile(src, dst);
@@ -136,20 +161,23 @@ export async function deleteWorktree(
 
   // Check for uncommitted changes unless the caller explicitly forces removal.
   if (!options.force) {
+    let dirty = false;
     try {
       const { stdout } = await execa("git", ["-C", wtPath, "status", "--porcelain"], {
         stdio: "pipe",
+        env: gitEnv(),
       });
-      if (stdout.trim()) {
-        throw new Error(
-          `Worktree "${name}" has uncommitted changes. Commit or stash before closing.`
-        );
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("uncommitted")) throw err;
-      // Re-throw the uncommitted changes error
-      throw err;
+      dirty = stdout.trim().length > 0;
+    } catch {
+      // The worktree path is gone or not a git repo (e.g. an orphan left by a
+      // crash). There's nothing to protect — fall through to removal instead of
+      // failing the close. (Previously this re-threw and wedged the session.)
+      dirty = false;
+    }
+    if (dirty) {
+      throw new Error(
+        `Worktree "${name}" has uncommitted changes. Commit or stash before closing.`,
+      );
     }
   }
 

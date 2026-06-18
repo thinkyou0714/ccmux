@@ -58,16 +58,19 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
 
     spinner.text = `Merging ${branch} into ${targetBranch}...`;
 
+    // Fixed locale so the "CONFLICT" check below isn't defeated by a localized
+    // git (LANG=ja_JP etc.), and never block on a credential prompt.
+    const gitEnv = { ...process.env, LC_ALL: "C", GIT_TERMINAL_PROMPT: "0" };
     try {
-      await execa("git", ["-C", session.projectPath, "checkout", targetBranch], { stdio: "pipe" });
-      await execa("git", ["-C", session.projectPath, ...mergeArgs], { stdio: "pipe" });
+      await execa("git", ["-C", session.projectPath, "checkout", targetBranch], { stdio: "pipe", env: gitEnv });
+      await execa("git", ["-C", session.projectPath, ...mergeArgs], { stdio: "pipe", env: gitEnv });
       if (opts.squash) {
-        await execa("git", ["-C", session.projectPath, "commit", "-m", `ccmux: squash merge ${branch}`], { stdio: "pipe" });
+        await execa("git", ["-C", session.projectPath, "commit", "-m", `ccmux: squash merge ${branch}`], { stdio: "pipe", env: gitEnv });
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("CONFLICT") || msg.includes("conflict")) {
-        await execa("git", ["-C", session.projectPath, "merge", "--abort"], { stdio: "pipe" }).catch(() => {});
+        await execa("git", ["-C", session.projectPath, "merge", "--abort"], { stdio: "pipe", env: gitEnv }).catch(() => {});
         spinner.warn(chalk.yellow(`Merge conflict detected — merge aborted.`));
         console.log(chalk.dim(`  Resolve manually in: ${session.worktreePath}`));
         console.log(chalk.dim(`  Then re-run: ccmux merge ${name} --target ${targetBranch}`));

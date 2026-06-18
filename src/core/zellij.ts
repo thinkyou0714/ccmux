@@ -1,7 +1,19 @@
 import { execa } from "execa";
 
-const ZELLIJ_BIN = process.env.ZELLIJ_BIN ?? `${process.env.HOME}/.local/bin/zellij`;
+// Resolve lazily so ZELLIJ_BIN/HOME set after module load are honored, and fall
+// back to PATH resolution when HOME is unset (was `undefined/.local/bin/...`).
+function zellijBin(): string {
+  if (process.env.ZELLIJ_BIN) return process.env.ZELLIJ_BIN;
+  const home = process.env.HOME ?? process.env.USERPROFILE;
+  return home ? `${home}/.local/bin/zellij` : "zellij";
+}
 const TMUX_BIN = "tmux";
+
+// Quote a value for safe interpolation inside a bash double-quoted string
+// (escape \ $ " ` so a worktree path can't break out and inject shell).
+function shellDQ(value: string): string {
+  return `"${value.replace(/[\\$"`]/g, "\\$&")}"`;
+}
 
 export type Multiplexer = "zellij" | "tmux" | "none";
 
@@ -18,7 +30,7 @@ export async function openSession(
 ): Promise<void> {
   const mux = detectMultiplexer();
   const tabName = `ccmux:${name}`;
-  const fullCmd = `cd "${cwd}" && ${command}`;
+  const fullCmd = `cd ${shellDQ(cwd)} && ${command}`;
 
   if (mux === "zellij") {
     await openZellijTab(tabName, fullCmd);
@@ -42,16 +54,16 @@ export async function sendToTab(name: string, prompt: string, delayMs = 3000): P
   if (mux === "zellij") {
     // Switch to the tab first
     try {
-      await execa(ZELLIJ_BIN, ["action", "go-to-tab-name", tabName], { stdio: "pipe" });
+      await execa(zellijBin(), ["action", "go-to-tab-name", tabName], { stdio: "pipe" });
     } catch {
       // Tab might still be starting — continue anyway
     }
     // Wait for CC to print its prompt
     await new Promise((r) => setTimeout(r, delayMs));
     // Write the prompt
-    await execa(ZELLIJ_BIN, ["action", "write-chars", prompt + "\n"], { stdio: "pipe" });
+    await execa(zellijBin(), ["action", "write-chars", prompt + "\n"], { stdio: "pipe" });
     // Switch back to previous tab so Cursor user isn't jarred
-    await execa(ZELLIJ_BIN, ["action", "go-to-previous-tab"], { stdio: "pipe" }).catch(() => {});
+    await execa(zellijBin(), ["action", "go-to-previous-tab"], { stdio: "pipe" }).catch(() => {});
   } else if (mux === "tmux") {
     await new Promise((r) => setTimeout(r, delayMs));
     await execa(
@@ -64,9 +76,9 @@ export async function sendToTab(name: string, prompt: string, delayMs = 3000): P
 }
 
 async function openZellijTab(name: string, command: string): Promise<void> {
-  await execa(ZELLIJ_BIN, ["action", "new-tab", "--name", name], { stdio: "pipe" });
+  await execa(zellijBin(), ["action", "new-tab", "--name", name], { stdio: "pipe" });
   await new Promise((r) => setTimeout(r, 300));
-  await execa(ZELLIJ_BIN, ["action", "write-chars", command + "\n"], { stdio: "pipe" });
+  await execa(zellijBin(), ["action", "write-chars", command + "\n"], { stdio: "pipe" });
 }
 
 async function openTmuxWindow(name: string, command: string): Promise<void> {
@@ -79,9 +91,9 @@ export async function closeTab(name: string): Promise<void> {
 
   if (mux === "zellij") {
     try {
-      await execa(ZELLIJ_BIN, ["action", "go-to-tab-name", tabName], { stdio: "pipe" });
+      await execa(zellijBin(), ["action", "go-to-tab-name", tabName], { stdio: "pipe" });
       await new Promise((r) => setTimeout(r, 200));
-      await execa(ZELLIJ_BIN, ["action", "close-tab"], { stdio: "pipe" });
+      await execa(zellijBin(), ["action", "close-tab"], { stdio: "pipe" });
     } catch {
       // Tab might already be gone
     }

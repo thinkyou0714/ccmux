@@ -139,11 +139,13 @@ function send(res: http.ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
-// Neutralize request-derived values before logging: drop anything outside
-// printable ASCII (notably CR/LF) and cap length, so a crafted header can't
-// forge log lines (CodeQL js/log-injection).
+// Neutralize request-derived values before logging so a crafted header can't
+// forge log lines. encodeURIComponent percent-encodes CR/LF and other control
+// characters and is recognized as a log-injection sanitizer (CodeQL
+// js/log-injection); we cap length too. Normal values (event names, GUIDs) are
+// left readable since their characters aren't encoded.
 function sanitizeForLog(value: string): string {
-  return value.slice(0, 200).replace(/[^\x20-\x7e]/g, "?");
+  return encodeURIComponent(value.slice(0, 200));
 }
 
 function checkAuth(req: http.IncomingMessage, authToken: string | undefined): boolean {

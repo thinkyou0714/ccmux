@@ -26,8 +26,8 @@ export async function serveCommand(opts: { port?: number }): Promise<void> {
     process.exit(0);
   };
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", () => void shutdown());
+  process.on("SIGTERM", () => void shutdown());
 
   // Keep process alive
   await new Promise<never>(() => {});

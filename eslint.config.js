@@ -34,4 +34,20 @@ export default [
       "@typescript-eslint/no-unnecessary-condition": "off",
     },
   },
+  {
+    // Type-checked rules for source: unhandled async (floating/misused promises)
+    // is a real bug source that plain tsc doesn't flag. Scoped to src so the
+    // type-aware parser only runs where tsconfig.json covers the files.
+    files: ["src/**/*.ts"],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-floating-promises": "error",
+      "@typescript-eslint/no-misused-promises": "error",
+    },
+  },
 ];

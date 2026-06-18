@@ -206,16 +206,19 @@ async function handle(
         // Auto failed before close — drop the queue row so a manual
         // re-trigger isn't permanently blocked by the dedup gate.
         releaseSession(sessionName);
-        const message = cmdErr instanceof Error ? cmdErr.message : String(cmdErr);
-        return send(res, 500, { error: message, sessionName });
+        // Log the detail server-side; return a generic message so internal
+        // error/stack details aren't exposed to the HTTP caller (CodeQL
+        // js/stack-trace-exposure).
+        console.error(`ccmux webhook: autoCommand failed for ${sessionName}:`, cmdErr);
+        return send(res, 500, { error: "internal error", sessionName });
       }
       return send(res, 200, { ok: true, sessionName });
     }
 
     send(res, 404, { error: "Not found" });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    send(res, 500, { error: message });
+    console.error("ccmux webhook handler error:", err);
+    send(res, 500, { error: "internal error" });
   }
 }
 
@@ -234,9 +237,9 @@ export async function startServer(portOverride?: number): Promise<{ port: number
 
   const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
     handle(req, res, authToken, webhookSecret).catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
+      console.error("ccmux webhook handler error:", err);
       res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: message }));
+      res.end(JSON.stringify({ error: "internal error" }));
     });
   };
 

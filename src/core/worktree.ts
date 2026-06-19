@@ -29,6 +29,27 @@ export interface DeleteWorktreeOptions extends CreateWorktreeOptions {
 
 const BRANCH_PREFIX = "ccmux";
 
+const SESSION_NAME_RE = /^[A-Za-z0-9._/-]+$/;
+
+/**
+ * Reject session names that could escape the worktree base via path traversal
+ * (CWE-22). A name becomes both a directory under `worktreeBase` (path.join) and
+ * a git branch segment, so disallow `..`/`.` segments, absolute paths, a leading
+ * `-` (git option injection), and anything outside a conservative charset.
+ */
+export function validateSessionName(name: string): void {
+  if (
+    !name ||
+    name.length > 128 ||
+    !SESSION_NAME_RE.test(name) ||
+    name.startsWith("-") ||
+    name.startsWith("/") ||
+    name.split("/").some((seg) => seg === ".." || seg === ".")
+  ) {
+    throw new Error(`Invalid session name: ${JSON.stringify(name).slice(0, 80)}`);
+  }
+}
+
 export function resolveWorktreeBase(override?: string): string {
   return (
     override ??
@@ -42,6 +63,7 @@ export async function createWorktree(
   projectPath: string,
   options: CreateWorktreeOptions = {},
 ): Promise<WorktreeInfo> {
+  validateSessionName(name);
   const branch = `${BRANCH_PREFIX}/${name}`;
   const worktreeBase = resolveWorktreeBase(options.worktreeBase);
   const wtPath = path.join(worktreeBase, name);
@@ -130,6 +152,7 @@ export async function deleteWorktree(
   projectPath: string,
   options: DeleteWorktreeOptions = {},
 ): Promise<void> {
+  validateSessionName(name);
   const worktreeBase = resolveWorktreeBase(options.worktreeBase);
   const wtPath = path.join(worktreeBase, name);
   const branch = `${BRANCH_PREFIX}/${name}`;

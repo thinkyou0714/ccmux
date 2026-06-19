@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import chalk from "chalk";
 import { newCommand } from "./commands/new.js";
 import { listCommand } from "./commands/list.js";
 import { closeCommand } from "./commands/close.js";
@@ -170,4 +171,11 @@ program
     await dashboardCommand(subcommand, opts);
   });
 
-program.parse(process.argv);
+// REL-01: thin CLI wrapper. Command functions now THROW on error (instead of
+// calling process.exit, which would kill the in-process serve daemon). Here at
+// the CLI boundary we turn a thrown error into a printed message + exit 1.
+program.parseAsync(process.argv).catch((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg) console.error(chalk.red(msg));
+  process.exit(1);
+});

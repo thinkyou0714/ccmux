@@ -93,4 +93,13 @@ describe("closeCommand --force", () => {
     const session = await getSession(name);
     expect(session?.status).toBe("closed");
   });
+
+  it("REL-01: throws (does not process.exit) when the session is missing", async () => {
+    const { closeCommand } = await import("../src/commands/close.js");
+    // A missing session used to `process.exit(1)` (fatal inside the serve
+    // daemon). It must now reject so the HTTP handler can return a 5xx instead.
+    await expect(
+      closeCommand("does-not-exist", { noHandoff: true, noDashboard: true }),
+    ).rejects.toThrow(/not found/);
+  });
 });

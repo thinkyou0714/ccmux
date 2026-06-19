@@ -52,8 +52,7 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
   const session = await getSession(name);
 
   if (!session) {
-    console.error(chalk.red(`Session "${name}" not found.`));
-    process.exit(1);
+    throw new Error(`Session "${name}" not found.`);
   }
 
   const spinner = ora(`Closing session "${name}"...`).start();
@@ -80,7 +79,9 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
       if (msg.includes("uncommitted") && !opts.force) {
         spinner.warn(chalk.yellow(`Worktree has uncommitted changes. Use --force to override.`));
         await updateSession(session.id, { status: "error" });
-        process.exit(1);
+        throw new Error(`Worktree "${name}" has uncommitted changes. Use --force to override.`, {
+          cause: err,
+        });
       }
       if (!opts.force) throw err;
     }
@@ -161,8 +162,12 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
     console.log(`  total cost: ${cost}`);
     if (diff) console.log(chalk.dim(`\n  diff summary:\n${diff.split("\n").map((l) => "    " + l).join("\n")}`));
   } catch (err: unknown) {
-    spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
-    process.exit(1);
+    // REL-01: throw instead of process.exit so the serve daemon (n8n.ts) that
+    // reuses closeCommand isn't killed by one failure. index.ts turns it into
+    // exit 1. The `isSpinning` guard avoids double-printing when an inner branch
+    // (e.g. the uncommitted-changes warn) already stopped the spinner.
+    if (spinner.isSpinning) spinner.fail();
+    throw err;
   }
 }
 

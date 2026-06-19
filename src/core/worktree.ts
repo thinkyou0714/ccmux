@@ -78,14 +78,14 @@ export async function createWorktree(
 
   // Create branch and worktree
   try {
-    await execa("git", ["-C", projectPath, "worktree", "add", "-b", branch, wtPath], {
+    await execa("git", ["-C", projectPath, "worktree", "add", "-b", branch, "--", wtPath], {
       stdio: "pipe",
     });
   } catch (err: unknown) {
     // Branch might already exist — try without -b
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("already exists")) {
-      await execa("git", ["-C", projectPath, "worktree", "add", wtPath, branch], {
+      await execa("git", ["-C", projectPath, "worktree", "add", "--", wtPath, branch], {
         stdio: "pipe",
       });
     } else {

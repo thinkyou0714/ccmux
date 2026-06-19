@@ -1,4 +1,4 @@
-// ESLint flat config (eslint 9). Intentionally minimal — tsc already enforces
+// ESLint flat config (eslint 10). Intentionally minimal — tsc already enforces
 // type safety, vitest enforces correctness; ESLint is here to catch only the
 // cheap-to-fix patterns that tsc doesn't (unused imports, unreachable code,
 // no-debugger, etc.) without becoming a treadmill of style rules.

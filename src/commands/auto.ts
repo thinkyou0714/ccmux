@@ -6,7 +6,7 @@ import path from "path";
 import { createWorktree } from "../core/worktree.js";
 import { openSession, sendToTab, getMuxInfo } from "../core/zellij.js";
 import { createSession, updateSession } from "../core/session.js";
-import { acquireLock } from "../core/lock.js";
+import { acquireLock, releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { buildClaudeEnv } from "../integrations/autoclaw.js";
 import type { CcmuxConfig } from "../config/schema.js";
@@ -196,8 +196,14 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
       ].join("\n")
     );
   } catch (err: unknown) {
-    spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
-    process.exit(1);
+    // REL-03: release the per-session lock on failure (new.ts already does this)
+    // so a failed auto doesn't leave the session permanently locked.
+    await releaseLock(sessionName).catch(() => {});
+    // REL-01: throw instead of process.exit. autoCommand is reused in-process by
+    // the serve daemon (integrations/n8n.ts); exiting there would kill the whole
+    // webhook server. The CLI wrapper in index.ts turns a throw into exit 1.
+    if (spinner.isSpinning) spinner.fail();
+    throw err;
   }
 }
 

@@ -18,8 +18,7 @@ export async function newCommand(name: string, opts: NewOptions): Promise<void> 
   const project = cfg.projects[projectKey];
 
   if (!project) {
-    console.error(chalk.red(`Unknown project "${projectKey}". Check ~/.ccmux/config.json`));
-    process.exit(1);
+    throw new Error(`Unknown project "${projectKey}". Check ~/.ccmux/config.json`);
   }
 
   const llm = opts.llm ?? project.defaultLlm;
@@ -63,7 +62,10 @@ export async function newCommand(name: string, opts: NewOptions): Promise<void> 
     );
   } catch (err: unknown) {
     await releaseLock(name).catch(() => {});
-    spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
-    process.exit(1);
+    // REL-01: throw instead of process.exit so the serve daemon (n8n.ts), which
+    // calls newCommand in-process, isn't killed by a single failure. The CLI
+    // wrapper in index.ts turns a throw into exit 1.
+    if (spinner.isSpinning) spinner.fail();
+    throw err;
   }
 }

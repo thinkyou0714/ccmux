@@ -280,6 +280,13 @@ export async function startServer(portOverride?: number): Promise<{ port: number
     server = http.createServer(handler);
   }
 
+  // REL-04: bound slow / half-open connections (slowloris). The server is
+  // loopback-only, but a stuck client shouldn't be able to hold a socket open
+  // indefinitely.
+  server.headersTimeout = 15_000;
+  server.requestTimeout = 30_000;
+  server.keepAliveTimeout = 5_000;
+
   await new Promise<void>((resolve, reject) => {
     server.listen(port, "127.0.0.1", resolve);
     server.once("error", reject);

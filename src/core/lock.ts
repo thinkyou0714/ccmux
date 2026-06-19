@@ -27,7 +27,9 @@ export async function acquireLock(name: string): Promise<void> {
       const pid = parseInt(existing, 10);
       try {
         process.kill(pid, 0);
-        throw new Error(`Session "${name}" is already running (PID: ${pid})`);
+        throw new Error(`Session "${name}" is already running (PID: ${pid})`, {
+          cause: err,
+        });
       } catch (killErr: unknown) {
         const isEsrch = (killErr as NodeJS.ErrnoException).code === "ESRCH";
         if (isEsrch) {

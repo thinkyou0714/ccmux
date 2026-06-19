@@ -8,6 +8,7 @@ import { closeCommand } from "../commands/close.js";
 import { listSessions } from "../core/session.js";
 import { autoCommand } from "../commands/auto.js";
 import { claimSession, releaseSession } from "../core/queue.js";
+import { validateSessionName } from "../core/worktree.js";
 
 type JsonBody = Record<string, unknown>;
 
@@ -16,11 +17,43 @@ interface RawBody {
   json: JsonBody;
 }
 
+/** Max accepted request body. The webhook receiver is unauthenticated when
+ *  authToken/webhookSecret are unset, so an oversized POST must not be buffered
+ *  into memory unbounded (CWE-770). 1 MiB covers any issue payload. */
+const MAX_BODY_BYTES = 1024 * 1024;
+
+class PayloadTooLargeError extends Error {
+  constructor() {
+    super("Payload too large");
+    this.name = "PayloadTooLargeError";
+  }
+}
+
 function readBody(req: http.IncomingMessage): Promise<RawBody> {
   return new Promise((resolve, reject) => {
+    // Reject an oversized Content-Length before reading a single byte.
+    const declared = Number(req.headers["content-length"] ?? "0");
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+      req.destroy();
+      reject(new PayloadTooLargeError());
+      return;
+    }
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => { chunks.push(chunk); });
+    let total = 0;
+    let aborted = false;
+    req.on("data", (chunk: Buffer) => {
+      if (aborted) return;
+      total += chunk.length;
+      if (total > MAX_BODY_BYTES) {
+        aborted = true;
+        req.destroy();
+        reject(new PayloadTooLargeError());
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => {
+      if (aborted) return;
       const raw = Buffer.concat(chunks);
       try {
         const json = raw.length === 0 ? {} : (JSON.parse(raw.toString("utf-8")) as JsonBody);
@@ -42,8 +75,17 @@ function send(res: http.ServerResponse, status: number, body: unknown): void {
 function checkAuth(req: http.IncomingMessage, authToken: string | undefined): boolean {
   if (!authToken) return true;
   const header = req.headers["authorization"];
-  if (!header) return false;
-  return header === `Bearer ${authToken}`;
+  if (typeof header !== "string") return false;
+  // Constant-time compare (mirror verifyGitHubSignature) — `===` short-circuits
+  // on the first differing byte and leaks the token via a timing side-channel.
+  const provided = Buffer.from(header);
+  const expected = Buffer.from(`Bearer ${authToken}`);
+  if (provided.length !== expected.length) return false;
+  try {
+    return crypto.timingSafeEqual(provided, expected);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -114,6 +156,11 @@ async function handle(
       const llm = (body.llm as "claude" | "autoclaw" | undefined) ?? "claude";
 
       if (!name) return send(res, 400, { error: "name is required" });
+      try {
+        validateSessionName(name);
+      } catch (e) {
+        return send(res, 400, { error: e instanceof Error ? e.message : "invalid name" });
+      }
 
       await newCommand(name, { project, llm });
       return send(res, 201, { ok: true, name });
@@ -123,6 +170,11 @@ async function handle(
       const { json: body } = await readBody(req);
       const name = body.name as string | undefined;
       if (!name) return send(res, 400, { error: "name is required" });
+      try {
+        validateSessionName(name);
+      } catch (e) {
+        return send(res, 400, { error: e instanceof Error ? e.message : "invalid name" });
+      }
 
       await closeCommand(name, {});
       return send(res, 200, { ok: true, name });
@@ -187,6 +239,9 @@ async function handle(
 
     send(res, 404, { error: "Not found" });
   } catch (err: unknown) {
+    if (err instanceof PayloadTooLargeError) {
+      return send(res, 413, { error: err.message });
+    }
     const message = err instanceof Error ? err.message : String(err);
     send(res, 500, { error: message });
   }

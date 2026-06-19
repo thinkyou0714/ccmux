@@ -1,4 +1,5 @@
 import { execa } from "execa";
+import os from "os";
 
 interface DailyEntry {
   date: string;
@@ -27,14 +28,26 @@ let _cache: { data: CcusageJson; fetchedAt: number } | null = null;
 const CACHE_TTL_MS = 60_000;
 
 function resolveClaudeConfigDir(): string | undefined {
-  // WSL2: Claude Code data lives under the Windows user profile, not the WSL home.
-  const winUser = process.env.WINDOWS_USERNAME ?? process.env.USER ?? "Rikuto";
-  const candidate = `/mnt/c/Users/${winUser}/.claude`;
-  // Use it only when it looks like WSL2 (no Windows path separators in HOME)
-  if (process.env.HOME && !process.env.HOME.includes(":\\")) {
-    return process.env.CLAUDE_CONFIG_DIR ?? candidate;
+  // Explicit override always wins.
+  if (process.env.CLAUDE_CONFIG_DIR) return process.env.CLAUDE_CONFIG_DIR;
+  // WSL2: Claude Code data lives under the Windows user profile, not the WSL
+  // home. Resolve the *Windows* user from the environment rather than hardcoding
+  // a name; if we can't, skip the WSL2 candidate instead of guessing.
+  const winUser =
+    process.env.WINDOWS_USERNAME ||
+    process.env.USERNAME ||
+    (() => {
+      try {
+        return os.userInfo().username;
+      } catch {
+        return "";
+      }
+    })();
+  // Only attempt the candidate under WSL (POSIX-looking HOME) with a real user.
+  if (winUser && process.env.HOME && !process.env.HOME.includes(":\\")) {
+    return `/mnt/c/Users/${winUser}/.claude`;
   }
-  return process.env.CLAUDE_CONFIG_DIR;
+  return undefined;
 }
 
 async function fetchCcusage(): Promise<CcusageJson | null> {

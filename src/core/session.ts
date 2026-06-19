@@ -105,16 +105,7 @@ async function readDB(): Promise<SessionsDB> {
 async function writeDB(db: SessionsDB): Promise<void> {
   await fs.mkdir(ccmuxDir(), { recursive: true });
   const tmp = `${sessionsFile()}.tmp`;
-  // Write + fsync the tmp file before the atomic rename so a crash / power-loss
-  // can't leave a zero-length sessions.json on filesystems that defer the data
-  // flush past the rename.
-  const handle = await fs.open(tmp, "w", 0o600);
-  try {
-    await handle.writeFile(JSON.stringify(db, null, 2));
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
+  await fs.writeFile(tmp, JSON.stringify(db, null, 2), { mode: 0o600 });
   await fs.rename(tmp, sessionsFile());
 }
 

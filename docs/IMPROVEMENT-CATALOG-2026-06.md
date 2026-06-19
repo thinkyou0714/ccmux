@@ -6,7 +6,7 @@
 
 **Summary:** ccmux is a well-structured CLI with genuinely thoughtful reliability scaffolding (atomic sessions.json lock with stale detection, SQLite INSERT-OR-IGNORE dedup queue, constant-time HMAC, TLS-verified Obsidian calls, array-arg execa avoiding shell injection, a 3-OS CI matrix). The biggest systemic risk is an architectural seam: command functions (newCommand/closeCommand/autoCommand) call process.exit(1) on error, but the same functions are invoked in-process by the long-lived `serve` daemon — so any command failure kills the whole webhook server and makes the queue-rollback / 500-response paths in n8n.ts dead code. Secondary risks cluster in the HTTP server (unbounded request body buffering = CWE-770 DoS, unvalidated session `name` enabling path traversal and feeding attacker-controlled GitHub issue text straight into an autonomous `claude --dangerously-skip-permissions` run) and a permanent dedup-block when an autonomous spawn fails. Test coverage is good for pure functions (HMAC, queue, hooks) but absent for the actual HTTP request handler, the auto/new/close command flows, and worktree create/delete. Most Tier-A fixes are small and behavior-preserving.
 
-This PR implements: SEC-01, SEC-02, SEC-05, DX-01, BUG-02, REL-05. Deferred (already owned by an open PR): REL-01 + REL-03 → **PR #39**.
+This PR implements: SEC-01, SEC-02, SEC-05, DX-01, BUG-02. Deferred: REL-01 + REL-03 → PR #39; REL-05 → Windows lock-race (see notes).
 
 ## Tier A
 
@@ -96,7 +96,7 @@ This PR implements: SEC-01, SEC-02, SEC-05, DX-01, BUG-02, REL-05. Deferred (alr
 - **fix:** Set server.requestTimeout (e.g. 30s), headersTimeout, and a maxConnections cap after createServer. Cheap defense-in-depth alongside SEC-01.
 - **files:** `src/integrations/n8n.ts`
 
-### REL-05 — writeDB on sessions.json is not crash-atomic across the temp file (mode set only on tmp, no fsync) and the lock TTL can race ✅ (this PR)
+### REL-05 — writeDB on sessions.json is not crash-atomic across the temp file (mode set only on tmp, no fsync) and the lock TTL can race ↪ (deferred — fsync shifts timing and exposes a Windows lock race in the concurrent-create test; needs a lock-layer fix first)
 - **severity:** low | **category:** reliability | **effort:** M | **risk:** low
 - **root cause:** writeDB (session.ts:105-110) writes a `.tmp` then renames — good — but does not fsync before rename, so a power-loss can leave a zero-length sessions.json on some filesystems. Separately, the file-lock uses a 30s stale TTL based on mtime (session.ts:50); a long withSessionLock op (slow Obsidian/git) under contention could have its lock declared stale and stolen by another process, causing a lost update. Low likelihood given operation duration but worth noting.
 - **fix:** fsync the tmp file handle before rename for the durability half. For the lock, refresh mtime during long ops or raise the TTL; the risk is small so this is optional hardening.

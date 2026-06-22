@@ -126,7 +126,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
 
         if (opts.loop) {
           // Ralph Loop: iterate until completion promise found or max iterations reached
-          await spawnLoopDaemon({
+          const loopPid = await spawnLoopDaemon({
             sessionName,
             prompt: opts.prompt,
             worktreePath: wt.path,
@@ -138,6 +138,10 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
             until: opts.until ?? "CCMUX_COMPLETE",
             sandbox: opts.sandbox,
           });
+          // REL-07: record the loop daemon's pid (mirrors the single-shot path)
+          // so pruneOrphanedSessions can detect a dead loop session; without a
+          // pid it skips the session forever and the orphan is never reaped.
+          await updateSession(session.id, { status: "busy", pid: loopPid });
           spinner.text = "Loop daemon spawned";
         } else {
           // Single-shot daemon
@@ -220,7 +224,7 @@ interface LoopDaemonOpts {
   sandbox?: boolean;
 }
 
-async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
+async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<number | undefined> {
   const { worktreePath, logFile, env, maxIter, until, prompt, sessionName, backend, cfg } = opts;
 
   // Write prompt and loop script to worktree (no shell-injected values)
@@ -266,6 +270,7 @@ async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
   });
   child.unref();
   await logHandle.close();
+  return child.pid;
 }
 
 

@@ -61,4 +61,24 @@ describe("session persistence locking", () => {
     expect(Date.now() - t0).toBeLessThan(3000); // reclaimed promptly, not after ~30s
     expect(s.name).toBe("after-dead-lock");
   });
+
+  it("does not steal a freshly-created, not-yet-written lock (lock-steal race fix)", async () => {
+    const lockPath = path.join(tmp, "sessions.json.lock");
+    // Simulate a holder that created the lock via open("wx") but has not yet
+    // written its {pid}: an EMPTY body with a fresh mtime. Reading "" must NOT
+    // be taken as a dead holder, or two acquirers would run concurrently.
+    await fs.writeFile(lockPath, "");
+
+    const p = createSession(sessionOpts("waits-for-holder"));
+
+    // After a grace period createSession is still waiting and has left the empty
+    // lock untouched — a steal would have unlinked it and written a {pid} body.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(await fs.readFile(lockPath, "utf-8")).toBe("");
+
+    // The "holder" finishes; createSession then acquires and completes.
+    await fs.rm(lockPath, { force: true });
+    const s = await p;
+    expect(s.name).toBe("waits-for-holder");
+  });
 });

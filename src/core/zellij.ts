@@ -31,11 +31,20 @@ export async function openSession(
   }
 }
 
+/** Startup grace before typing the prompt into the tab. F-06: a fixed 3s can be
+ * too short for a cold Claude-Code start (npm resolve, autoclaw/Ollama backend,
+ * slow disk), silently dropping the prompt into a half-initialized TUI. The
+ * default stays 3s; set CCMUX_SEND_DELAY_MS to raise it for slow environments. */
+function defaultSendDelayMs(): number {
+  const n = Number(process.env.CCMUX_SEND_DELAY_MS);
+  return Number.isFinite(n) && n > 0 ? n : 3000;
+}
+
 /**
  * Send a prompt string to an already-open ccmux tab.
- * Waits for CC to finish startup before typing.
+ * Waits for CC to finish startup before typing (see CCMUX_SEND_DELAY_MS).
  */
-export async function sendToTab(name: string, prompt: string, delayMs = 3000): Promise<void> {
+export async function sendToTab(name: string, prompt: string, delayMs = defaultSendDelayMs()): Promise<void> {
   const mux = detectMultiplexer();
   const tabName = `ccmux:${name}`;
 

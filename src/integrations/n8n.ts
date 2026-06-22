@@ -6,7 +6,7 @@ import { loadConfig } from "../config/schema.js";
 import { newCommand } from "../commands/new.js";
 import { closeCommand } from "../commands/close.js";
 import { listSessions } from "../core/session.js";
-import { autoCommand } from "../commands/auto.js";
+import { autoCommand, isSandboxAvailable } from "../commands/auto.js";
 import { claimSession, releaseSession } from "../core/queue.js";
 import { validateSessionName } from "../core/worktree.js";
 
@@ -225,8 +225,25 @@ async function handle(
         });
       }
 
+      // SEC-04: `prompt` is built from the attacker-controlled issue title/body
+      // and is handed to `claude --dangerously-skip-permissions`. Webhook runs
+      // are therefore sandboxed by default; when the bubblewrap sandbox cannot
+      // be applied (non-Linux host or bwrap not installed) we REFUSE rather than
+      // execute untrusted input unsandboxed. Opt out (at your own risk) with
+      // CCMUX_WEBHOOK_ALLOW_UNSANDBOXED=1.
+      const sandbox = process.env.CCMUX_WEBHOOK_ALLOW_UNSANDBOXED !== "1";
+      if (sandbox && !(await isSandboxAvailable())) {
+        releaseSession(sessionName);
+        return send(res, 503, {
+          error:
+            "Webhook autonomous runs require the bubblewrap sandbox (Linux + bwrap installed). " +
+            "Install bubblewrap, or set CCMUX_WEBHOOK_ALLOW_UNSANDBOXED=1 to run untrusted issue text unsandboxed (NOT recommended).",
+          sessionName,
+        });
+      }
+
       try {
-        await autoCommand(sessionName, { prompt });
+        await autoCommand(sessionName, { prompt, sandbox });
       } catch (cmdErr: unknown) {
         // Auto failed before close — drop the queue row so a manual
         // re-trigger isn't permanently blocked by the dedup gate.

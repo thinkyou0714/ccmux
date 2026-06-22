@@ -7,7 +7,12 @@ import { closeCommand } from "./close.js";
 
 export interface MergeOptions {
   squash?: boolean;
-  noFf?: boolean;
+  /**
+   * Commander stores `--no-ff` as `ff: false` (default `true`), NOT as `noFf`.
+   * The previous `opts.noFf` was always `undefined`, so `--no-ff` silently did
+   * nothing. Push `--no-ff` only when the user explicitly disabled fast-forward.
+   */
+  ff?: boolean;
   target?: string;
   keep?: boolean;
   pr?: boolean;
@@ -52,7 +57,7 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
     const branch = `ccmux/${name}`;
     const mergeArgs = ["merge"];
     if (opts.squash) mergeArgs.push("--squash");
-    if (opts.noFf) mergeArgs.push("--no-ff");
+    if (opts.ff === false) mergeArgs.push("--no-ff");
     mergeArgs.push(branch);
 
     spinner.text = `Merging ${branch} into ${targetBranch}...`;
@@ -82,7 +87,7 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
     }
 
     if (!opts.keep) {
-      await closeCommand(name, { noHandoff: false });
+      await closeCommand(name, { handoff: true });
     }
   } catch (err: unknown) {
     spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));

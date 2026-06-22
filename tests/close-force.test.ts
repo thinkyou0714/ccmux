@@ -87,7 +87,7 @@ describe("closeCommand --force", () => {
 
     await fs.writeFile(path.join(wt.path, "tracked.txt"), "dirty\n");
 
-    await closeCommand(name, { force: true, noHandoff: true, noDashboard: true });
+    await closeCommand(name, { force: true, handoff: false, dashboard: false });
 
     await expect(fs.access(wt.path)).rejects.toThrow();
     const session = await getSession(name);
@@ -99,7 +99,7 @@ describe("closeCommand --force", () => {
     // A missing session used to `process.exit(1)` (fatal inside the serve
     // daemon). It must now reject so the HTTP handler can return a 5xx instead.
     await expect(
-      closeCommand("does-not-exist", { noHandoff: true, noDashboard: true }),
+      closeCommand("does-not-exist", { handoff: false, dashboard: false }),
     ).rejects.toThrow(/not found/);
   });
 });

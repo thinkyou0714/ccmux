@@ -100,6 +100,13 @@ export async function createWorktree(
   return { name, branch, path: wtPath, projectPath };
 }
 
+/** True iff `target` is `base` itself or a path strictly beneath it. Uses
+ * path.relative so `..` segments and absolute paths are rejected cross-platform. */
+function isInside(base: string, target: string): boolean {
+  const rel = path.relative(path.resolve(base), target);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
 /**
  * BL-5: read `.worktreeinclude` (gitignore-style, but for files we DO want
  * copied into a worktree even though they are typically gitignored — `.env`,
@@ -129,8 +136,20 @@ export async function applyWorktreeInclude(
     .filter((l) => l.length > 0 && !l.startsWith("#"));
 
   for (const rel of entries) {
-    const src = path.join(projectPath, rel);
-    const dst = path.join(wtPath, rel);
+    const src = path.resolve(projectPath, rel);
+    const dst = path.resolve(wtPath, rel);
+    // SEC: `.worktreeinclude` ships inside the repo, so on the webhook lane an
+    // attacker-controlled branch could list `../../../.ssh/authorized_keys` (or
+    // an absolute path). path.resolve happily follows `..`/absolute entries, so
+    // refuse anything whose source escapes the project or whose destination
+    // escapes the new worktree before reading or writing a single byte.
+    if (!isInside(projectPath, src) || !isInside(wtPath, dst)) {
+      result.missing.push(rel);
+      process.stderr.write(
+        `ccmux: .worktreeinclude — refusing "${rel}" (path escapes the project/worktree)\n`,
+      );
+      continue;
+    }
     try {
       await fs.mkdir(path.dirname(dst), { recursive: true });
       await fs.copyFile(src, dst);

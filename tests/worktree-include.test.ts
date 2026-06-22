@@ -62,4 +62,30 @@ describe("applyWorktreeInclude (BL-B2)", () => {
     expect(r.copied).toEqual([]);
     expect(r.missing).toEqual([]);
   });
+
+  it("refuses path-traversal entries so the write stays inside the worktree", async () => {
+    // Isolated bases so `..` from the project and the worktree land in distinct
+    // dirs (the shared beforeEach puts proj/wt side by side under tmpdir).
+    const projBase = await fs.mkdtemp(path.join(os.tmpdir(), "ccmux-wti-pb-"));
+    const wtBase = await fs.mkdtemp(path.join(os.tmpdir(), "ccmux-wti-wb-"));
+    const proj2 = path.join(projBase, "repo");
+    const wt2 = path.join(wtBase, "wt");
+    await fs.mkdir(proj2);
+    await fs.mkdir(wt2);
+
+    // A real, copyable source OUTSIDE the project, reachable via `..`. The old
+    // code (path.join) would follow `..` and copy it to <wtBase>/pwned.txt.
+    await fs.writeFile(path.join(projBase, "pwned.txt"), "OWNED");
+    await fs.writeFile(path.join(proj2, ".env"), "OK=1");
+    await fs.writeFile(path.join(proj2, ".worktreeinclude"), ".env\n../pwned.txt\n");
+
+    const r = await applyWorktreeInclude(proj2, wt2);
+    expect(r.copied).toEqual([".env"]);
+    expect(r.missing).toEqual(["../pwned.txt"]);
+    // The escaping write must NOT have happened.
+    await expect(fs.access(path.join(wtBase, "pwned.txt"))).rejects.toThrow();
+
+    await fs.rm(projBase, { recursive: true, force: true });
+    await fs.rm(wtBase, { recursive: true, force: true });
+  });
 });

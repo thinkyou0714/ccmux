@@ -46,13 +46,41 @@ async function acquireSessionLock(): Promise<() => Promise<void>> {
       if (code !== "EEXIST") throw err;
 
       try {
+        // F-03: prefer PID liveness over the coarse 30s mtime TTL. The lock
+        // records the holder's pid; if that process is gone (ESRCH) or the pid
+        // is unparseable, the lock is stale NOW — don't make every other session
+        // op wait out the full TTL behind a crashed holder (core/lock.ts already
+        // does this). Keep the mtime TTL as the fallback for the cross-host /
+        // pid-reuse case where the pid looks alive but the holder really died.
+        const raw = await fs.readFile(lockPath, "utf-8");
+        let holderPid = NaN;
+        try {
+          holderPid = Number((JSON.parse(raw) as { pid?: unknown }).pid);
+        } catch {
+          /* corrupt lock body → treat as no live holder */
+        }
+
+        let holderAlive = false;
+        if (Number.isInteger(holderPid) && holderPid > 0) {
+          try {
+            process.kill(holderPid, 0);
+            holderAlive = true;
+          } catch (e) {
+            // ESRCH = no such process (dead). EPERM = alive but owned by another
+            // user — respect it rather than steal.
+            holderAlive = (e as NodeJS.ErrnoException).code !== "ESRCH";
+          }
+        }
+
         const stat = await fs.stat(lockPath);
-        if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+        const ttlExpired = Date.now() - stat.mtimeMs > LOCK_STALE_MS;
+
+        if (!holderAlive || ttlExpired) {
           await fs.unlink(lockPath);
           continue;
         }
       } catch {
-        // The lock disappeared between open/stat/unlink; retry immediately.
+        // The lock disappeared between read/stat/unlink; retry immediately.
         continue;
       }
 

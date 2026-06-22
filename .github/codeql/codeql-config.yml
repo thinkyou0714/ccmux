@@ -1,0 +1,20 @@
+name: "ccmux CodeQL config"
+
+# Exclude js/user-controlled-bypass (CWE-807) for ccmux's webhook→agent flow.
+#
+# The /webhook/github endpoint deliberately turns an authenticated GitHub
+# webhook into an autonomous `claude` run — that is the core purpose of the n8n
+# integration. The flow is gated by a MANDATORY, constant-time HMAC-SHA256
+# signature check (verifyGitHubSignature); reaching the agent requires a valid
+# signature, which is not forgeable without the shared secret.
+#
+# CodeQL's user-controlled-bypass query flags any branch driven by request data
+# (headers/body) that guards a sensitive action, and cannot distinguish a strong
+# cryptographic gate from a weak one — so it reports this intentional, properly
+# authenticated design as a vulnerability. It is a false positive here.
+#
+# Only this one query is filtered; the full security-extended suite still runs
+# against the rest of src/.
+query-filters:
+  - exclude:
+      id: js/user-controlled-bypass

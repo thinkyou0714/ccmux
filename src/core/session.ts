@@ -93,11 +93,42 @@ interface SessionsDB {
   sessions: Session[];
 }
 
-async function readDB(): Promise<SessionsDB> {
+async function backupCorruptDB(raw: string): Promise<void> {
+  // Preserve the unparseable file under a timestamped name BEFORE the caller's
+  // empty DB gets written back over the original (which would erase every
+  // session record). Best-effort: a failed backup must not block the CLI.
+  const backup = `${sessionsFile()}.corrupt-${Date.now()}`;
   try {
-    const raw = await fs.readFile(sessionsFile(), "utf-8");
-    return JSON.parse(raw) as SessionsDB;
+    await fs.writeFile(backup, raw, { mode: 0o600 });
+    process.stderr.write(
+      `ccmux: sessions.json was unreadable and has been backed up to ${backup}; ` +
+        `starting with an empty session list.\n`,
+    );
   } catch {
+    // ignore — nothing more we can safely do
+  }
+}
+
+async function readDB(): Promise<SessionsDB> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(sessionsFile(), "utf-8");
+  } catch {
+    // Missing or unreadable file — first run, or a transient IO error. Start
+    // fresh without a backup (there is nothing meaningful to preserve).
+    return { version: 1, sessions: [] };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as SessionsDB;
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.sessions)) {
+      throw new Error("sessions.json has an unexpected shape");
+    }
+    return parsed;
+  } catch {
+    // Corrupt JSON. Returning an empty DB lets the next writeDB overwrite and
+    // destroy the file, so back it up first (see backupCorruptDB).
+    await backupCorruptDB(raw);
     return { version: 1, sessions: [] };
   }
 }
@@ -105,7 +136,21 @@ async function readDB(): Promise<SessionsDB> {
 async function writeDB(db: SessionsDB): Promise<void> {
   await fs.mkdir(ccmuxDir(), { recursive: true });
   const tmp = `${sessionsFile()}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(db, null, 2), { mode: 0o600 });
+  // REL-05: write → fsync → rename so a crash/power-loss can't leave a
+  // zero-length or partially-written sessions.json on filesystems that commit
+  // the rename ahead of the file data; the rename is the atomic swap. fsync is
+  // POSIX-only — on Windows its latency widens the sessions-lock staleness
+  // window (a deferred concern) and the rename already replaces atomically, so
+  // we skip it there to leave that path's timing unchanged.
+  const handle = await fs.open(tmp, "w", 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(db, null, 2));
+    if (process.platform !== "win32") {
+      await handle.sync();
+    }
+  } finally {
+    await handle.close();
+  }
   await fs.rename(tmp, sessionsFile());
 }
 

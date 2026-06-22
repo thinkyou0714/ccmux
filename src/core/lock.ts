@@ -25,6 +25,18 @@ export async function acquireLock(name: string): Promise<void> {
     try {
       const existing = await fs.readFile(lp, "utf-8");
       const pid = parseInt(existing, 10);
+
+      // A corrupt or empty lock file parses to NaN (or a non-positive pid).
+      // Such a value can never identify a live process, and process.kill(NaN, 0)
+      // throws a RangeError — which the logic below would surface as the
+      // original EEXIST, wedging the lock permanently. Treat it as stale and
+      // reclaim it, mirroring the ESRCH (dead-owner) branch.
+      if (!Number.isInteger(pid) || pid <= 0) {
+        await fs.unlink(lp).catch(() => {});
+        await fs.writeFile(lp, String(process.pid), { flag: "wx", mode: 0o600 });
+        return;
+      }
+
       try {
         process.kill(pid, 0);
         throw new Error(`Session "${name}" is already running (PID: ${pid})`, {

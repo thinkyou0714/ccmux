@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import ora from "ora";
+import { execa } from "execa";
 import { spawn } from "child_process";
 import fs from "fs/promises";
 import path from "path";
@@ -55,6 +56,18 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
   }
 
   const { type: muxType } = getMuxInfo();
+
+  // SEC-04: an autonomous `claude --dangerously-skip-permissions` run on
+  // untrusted input (e.g. a webhook-delivered GitHub issue body) must stay
+  // inside the bubblewrap sandbox. That wrapper is only applied on the daemon
+  // (non-mux) path via buildLaunchArgs, so refuse a sandboxed request from
+  // inside zellij/tmux rather than launching an unsandboxed tab.
+  if (opts.sandbox && muxType !== "none") {
+    throw new Error(
+      "ccmux: --sandbox is only enforced in daemon mode — run outside zellij/tmux (as `ccmux serve` does) for sandboxed autonomous runs",
+    );
+  }
+
   const spinner = ora(`Auto-launching "${sessionName}" [${muxType}]...`).start();
 
   try {
@@ -126,7 +139,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
 
         if (opts.loop) {
           // Ralph Loop: iterate until completion promise found or max iterations reached
-          await spawnLoopDaemon({
+          const loopPid = await spawnLoopDaemon({
             sessionName,
             prompt: opts.prompt,
             worktreePath: wt.path,
@@ -138,6 +151,10 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
             until: opts.until ?? "CCMUX_COMPLETE",
             sandbox: opts.sandbox,
           });
+          // REL-07: record the loop daemon's pid (mirrors the single-shot path)
+          // so pruneOrphanedSessions can detect a dead loop session; without a
+          // pid it skips the session forever and the orphan is never reaped.
+          await updateSession(session.id, { status: "busy", pid: loopPid });
           spinner.text = "Loop daemon spawned";
         } else {
           // Single-shot daemon
@@ -220,7 +237,7 @@ interface LoopDaemonOpts {
   sandbox?: boolean;
 }
 
-async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
+async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<number | undefined> {
   const { worktreePath, logFile, env, maxIter, until, prompt, sessionName, backend, cfg } = opts;
 
   // Write prompt and loop script to worktree (no shell-injected values)
@@ -236,25 +253,15 @@ async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
   );
   const claudeInvocation = buildShellInvocation(claudeBin, claudeSandboxArgs);
 
-  const scriptContent = [
-    `#!/usr/bin/env bash`,
-    `set -euo pipefail`,
-    `MAX_ITER="${maxIter}"`,
-    `UNTIL_PATTERN="${escapeBashDQ(until)}"`,
-    `LOGFILE="${escapeBashDQ(logFile)}"`,
-    `ITER=0`,
-    `while [ "$ITER" -lt "$MAX_ITER" ]; do`,
-    `  ITER=$((ITER + 1))`,
-    `  echo "=== ccmux loop iteration $ITER / $MAX_ITER ===" >> "$LOGFILE"`,
-    `  ${claudeInvocation} >> "$LOGFILE" 2>&1 || true`,
-    `  if grep -qF "$UNTIL_PATTERN" "$LOGFILE"; then`,
-    `    echo "=== CCMUX_LOOP_COMPLETE ===" >> "$LOGFILE"`,
-    `    exit 0`,
-    `  fi`,
-    `done`,
-    `echo "=== CCMUX_LOOP_MAX_ITER_REACHED ===" >> "$LOGFILE"`,
-  ].join("\n") + "\n";
+  // SEC-06: fail fast (and clearly) if any value that flows into the generated
+  // loop script or its environment carries a control character. With the
+  // env-var passing below this is belt-and-suspenders, but it forecloses a
+  // crafted --until / path ever breaking the script structure.
+  assertLoopValueSafe("--until", until);
+  assertLoopValueSafe("log path", logFile);
+  assertLoopValueSafe("worktree path", worktreePath);
 
+  const scriptContent = buildLoopDaemonScript(claudeInvocation);
   await fs.writeFile(loopScript, scriptContent, { mode: 0o755 });
 
   const logHandle = await fs.open(logFile, "a");
@@ -262,10 +269,64 @@ async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<void> {
     cwd: worktreePath,
     detached: true,
     stdio: ["ignore", logHandle.fd, logHandle.fd],
-    env,
+    // SEC-06: pass the run parameters through the environment instead of
+    // interpolating them into the script text, eliminating the shell-quoting
+    // dependency for the user-supplied --until pattern and derived log path.
+    env: {
+      ...env,
+      CCMUX_LOOP_MAX_ITER: String(maxIter),
+      CCMUX_LOOP_UNTIL: until,
+      CCMUX_LOOP_LOGFILE: logFile,
+    },
   });
   child.unref();
   await logHandle.close();
+  return child.pid;
+}
+
+/**
+ * SEC-06: reject control characters (newline, CR, NUL, …) in values that reach
+ * the generated loop daemon script or its environment. Throws on the first
+ * offending value so a crafted input fails loudly instead of producing a
+ * malformed script.
+ */
+export function assertLoopValueSafe(label: string, value: string): void {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      throw new Error(`ccmux: refusing to spawn loop daemon — ${label} contains a control character`);
+    }
+  }
+}
+
+/**
+ * SEC-06: build the .ccmux-loop.sh body. Run parameters (max iterations, the
+ * --until pattern, the log path) are read from the environment at runtime
+ * (CCMUX_LOOP_*), NOT interpolated here, so the only interpolated value is the
+ * already-shell-quoted claude invocation. `:?` makes bash abort if a parameter
+ * is somehow unset.
+ */
+export function buildLoopDaemonScript(claudeInvocation: string): string {
+  return (
+    [
+      `#!/usr/bin/env bash`,
+      `set -euo pipefail`,
+      `MAX_ITER="\${CCMUX_LOOP_MAX_ITER:?}"`,
+      `UNTIL_PATTERN="\${CCMUX_LOOP_UNTIL:?}"`,
+      `LOGFILE="\${CCMUX_LOOP_LOGFILE:?}"`,
+      `ITER=0`,
+      `while [ "$ITER" -lt "$MAX_ITER" ]; do`,
+      `  ITER=$((ITER + 1))`,
+      `  echo "=== ccmux loop iteration $ITER / $MAX_ITER ===" >> "$LOGFILE"`,
+      `  ${claudeInvocation} >> "$LOGFILE" 2>&1 || true`,
+      `  if grep -qF "$UNTIL_PATTERN" "$LOGFILE"; then`,
+      `    echo "=== CCMUX_LOOP_COMPLETE ===" >> "$LOGFILE"`,
+      `    exit 0`,
+      `  fi`,
+      `done`,
+      `echo "=== CCMUX_LOOP_MAX_ITER_REACHED ===" >> "$LOGFILE"`,
+    ].join("\n") + "\n"
+  );
 }
 
 
@@ -349,4 +410,22 @@ export function buildLaunchArgs(
   ];
 
   return { bin: "bwrap", args: bwrapArgs };
+}
+
+/**
+ * SEC-04: webhook-triggered autonomous runs execute attacker-controlled issue
+ * text under --dangerously-skip-permissions and so must be contained. The
+ * bubblewrap sandbox in buildLaunchArgs is that containment; it only works on
+ * Linux with bwrap installed. The webhook entrypoint uses this to refuse an
+ * untrusted run when the sandbox cannot be applied, instead of executing it
+ * unsandboxed.
+ */
+export async function isSandboxAvailable(): Promise<boolean> {
+  if (process.platform !== "linux") return false;
+  try {
+    await execa("bwrap", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }

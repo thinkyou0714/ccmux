@@ -4,7 +4,7 @@ import fs from "fs/promises";
 import path from "path";
 import { spawn } from "child_process";
 import { loadConfig } from "../config/schema.js";
-import { resolveClaudeCmd } from "../integrations/autoclaw.js";
+import { resolveClaudeModel } from "../integrations/autoclaw.js";
 
 const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
 
@@ -82,10 +82,13 @@ export async function reflectCommand(name: string, opts: ReflectOptions): Promis
   await fs.mkdir(path.dirname(tmpPromptFile), { recursive: true });
   await fs.writeFile(tmpPromptFile, prompt, "utf-8");
 
-  const baseCmd = await resolveClaudeCmd(opts.backend ?? "claude");
-  const parsedCmd = parseCmd(baseCmd);
-  const claudeBin = parsedCmd[0];
-  const claudeExtraArgs = parsedCmd.slice(1);
+  // F-09: build the claude bin + args structurally rather than formatting a
+  // shell string and re-splitting it on spaces (which mangled any model name
+  // containing a space/quote). The ANTHROPIC_BASE_URL env is applied inside
+  // runClaudeReflect from the url argument below.
+  const claudeBin = "claude";
+  const model = await resolveClaudeModel(opts.backend ?? "claude");
+  const claudeExtraArgs = model ? ["--model", model] : [];
 
   const reflection = await runClaudeReflect(
     claudeBin,
@@ -142,14 +145,6 @@ export async function reflectCommand(name: string, opts: ReflectOptions): Promis
     console.log(chalk.dim("\n  To apply these rules: ccmux reflect " + name + " --apply"));
     console.log(chalk.dim("  To save to file:      ccmux reflect " + name + " --output-file rules.md"));
   }
-}
-
-function parseCmd(cmd: string): string[] {
-  // cmd is either "claude" or `ANTHROPIC_BASE_URL="..." claude [--model x]`
-  // Strip env var prefix parts (KEY=VALUE), return [binary, ...args]
-  const parts = cmd.split(" ");
-  const binIdx = parts.findIndex((p) => !p.includes("="));
-  return [parts[binIdx] ?? "claude", ...parts.slice(binIdx + 1)];
 }
 
 function runClaudeReflect(

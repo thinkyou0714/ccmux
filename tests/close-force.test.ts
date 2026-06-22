@@ -94,6 +94,40 @@ describe("closeCommand --force", () => {
     expect(session?.status).toBe("closed");
   });
 
+  it("F-01: refuses an uncommitted close without --force, preserving the worktree and releasing the lock", async () => {
+    const name = "dirty-noforce";
+    const { createWorktree } = await import("../src/core/worktree.js");
+    const { createSession, getSession } = await import("../src/core/session.js");
+    const { closeCommand } = await import("../src/commands/close.js");
+    const { acquireLock, isLocked } = await import("../src/core/lock.js");
+
+    const wt = await createWorktree(name, repo, { worktreeBase });
+    await createSession({
+      name,
+      branch: wt.branch,
+      worktreePath: wt.path,
+      projectPath: repo,
+      zellijTab: `ccmux:${name}`,
+      pid: undefined,
+      project: "test",
+      llmBackend: "claude",
+    });
+    await fs.writeFile(path.join(wt.path, "tracked.txt"), "dirty\n");
+
+    // The per-session lock that `new`/`auto` would have created.
+    await acquireLock(name);
+
+    await expect(
+      closeCommand(name, { handoff: false, dashboard: false }),
+    ).rejects.toThrow(/uncommitted/);
+
+    // The worktree (and the uncommitted work) survives the refused close...
+    await expect(fs.access(wt.path)).resolves.toBeUndefined();
+    // ...the session is flagged error, and the lock was released on failure (F-01).
+    expect((await getSession(name))?.status).toBe("error");
+    expect(await isLocked(name)).toBe(false);
+  });
+
   it("REL-01: throws (does not process.exit) when the session is missing", async () => {
     const { closeCommand } = await import("../src/commands/close.js");
     // A missing session used to `process.exit(1)` (fatal inside the serve

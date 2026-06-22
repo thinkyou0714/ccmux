@@ -105,7 +105,21 @@ async function readDB(): Promise<SessionsDB> {
 async function writeDB(db: SessionsDB): Promise<void> {
   await fs.mkdir(ccmuxDir(), { recursive: true });
   const tmp = `${sessionsFile()}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(db, null, 2), { mode: 0o600 });
+  // REL-05: write → fsync → rename so a crash/power-loss can't leave a
+  // zero-length or partially-written sessions.json on filesystems that commit
+  // the rename ahead of the file data; the rename is the atomic swap. fsync is
+  // POSIX-only — on Windows its latency widens the sessions-lock staleness
+  // window (a deferred concern) and the rename already replaces atomically, so
+  // we skip it there to leave that path's timing unchanged.
+  const handle = await fs.open(tmp, "w", 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(db, null, 2));
+    if (process.platform !== "win32") {
+      await handle.sync();
+    }
+  } finally {
+    await handle.close();
+  }
   await fs.rename(tmp, sessionsFile());
 }
 

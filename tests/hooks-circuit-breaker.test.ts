@@ -22,7 +22,11 @@ function fire(input: object, env: Record<string, string> = {}): { code: number; 
   const r = spawnSync("bash", [stopHook], {
     input: JSON.stringify(input),
     encoding: "utf-8",
-    env: { ...process.env, ...env },
+    // This suite tests the circuit breaker, not cost capture. The TASK_STATE.md
+    // it writes would otherwise trigger the ccusage path (a node + ccusage spawn
+    // per fire); disabling it removes those spawns, which is what pushed the
+    // 3-fire test past the default 5s timeout on slow Windows CI runners.
+    env: { ...process.env, CCMUX_DISABLE_CCUSAGE: "1", ...env },
   });
   return { code: r.status ?? 1, stderr: r.stderr ?? "" };
 }
@@ -48,7 +52,7 @@ describe("BL-3: Stop hook circuit breaker", () => {
     const tripped = fire({ stop_hook_active: false }, env);
     expect(tripped.code).toBe(0);
     expect(tripped.stderr).toMatch(/circuit breaker tripped/);
-  });
+  }, 30_000); // 5 bash-hook spawns; generous margin for slow Windows CI runners
 
   it("allows stop immediately on context-limit pattern", () => {
     const r = fire({

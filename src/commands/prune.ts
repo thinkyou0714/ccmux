@@ -39,6 +39,12 @@ export async function pruneCommand(opts: PruneOptions): Promise<void> {
     console.log();
     const removeSpinner = ora("Removing orphaned worktrees...").start();
     let removed = 0;
+    // REL-06: an orphaned session's process died, so it almost always left
+    // uncommitted work. Without --force, deleteWorktree's dirty-tree guard
+    // throws and the orphan is silently skipped — stranded forever unless the
+    // user happens to know about --force. Collect skips and surface a clear,
+    // actionable summary so the dead-end is visible.
+    const skipped: { name: string; path: string }[] = [];
     const cfg = await loadConfig();
 
     for (const s of orphaned) {
@@ -52,12 +58,30 @@ export async function pruneCommand(opts: PruneOptions): Promise<void> {
         removed++;
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
+        skipped.push({ name: s.name, path: s.worktreePath });
         removeSpinner.warn(chalk.yellow(`  Skipped "${s.name}": ${msg}`));
         removeSpinner.start();
       }
     }
 
     removeSpinner.succeed(chalk.green(`Pruned ${removed} orphaned session(s).`));
+
+    if (skipped.length > 0) {
+      console.log();
+      console.log(
+        chalk.yellow(
+          `  ${skipped.length} orphan(s) skipped — likely uncommitted changes in a dead session:`
+        )
+      );
+      for (const sk of skipped) {
+        console.log(chalk.dim(`    ${sk.name}  →  ${sk.path}`));
+      }
+      console.log(
+        chalk.dim(
+          `  Recover any wanted work from those paths, then re-run with --force to remove them.`
+        )
+      );
+    }
   } catch (err: unknown) {
     spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
     process.exit(1);

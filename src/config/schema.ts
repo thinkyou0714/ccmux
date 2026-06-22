@@ -110,6 +110,16 @@ export async function loadConfig(): Promise<CcmuxConfig> {
   return _config;
 }
 
+/**
+ * REL-08: drop the process-wide cache so the next loadConfig() re-reads from
+ * disk. loadConfig memoizes for the life of the process, so a long-lived daemon
+ * (`ccmux serve`) otherwise never sees an edited ~/.ccmux/config.json (rotated
+ * webhookSecret, toggled integration). The serve SIGHUP handler calls this.
+ */
+export function invalidateConfigCache(): void {
+  _config = null;
+}
+
 export async function saveConfig(cfg: CcmuxConfig): Promise<void> {
   await fs.mkdir(ccmuxDir(), { recursive: true });
   await fs.writeFile(configFile(), JSON.stringify(cfg, null, 2), { mode: 0o600 });

@@ -46,41 +46,41 @@ async function acquireSessionLock(): Promise<() => Promise<void>> {
       if (code !== "EEXIST") throw err;
 
       try {
-        // F-03: prefer PID liveness over the coarse 30s mtime TTL. The lock
-        // records the holder's pid; if that process is gone (ESRCH) or the pid
-        // is unparseable, the lock is stale NOW — don't make every other session
-        // op wait out the full TTL behind a crashed holder (core/lock.ts already
-        // does this). Keep the mtime TTL as the fallback for the cross-host /
-        // pid-reuse case where the pid looks alive but the holder really died.
-        const raw = await fs.readFile(lockPath, "utf-8");
+        const stat = await fs.stat(lockPath);
+        const ttlExpired = Date.now() - stat.mtimeMs > LOCK_STALE_MS;
+
+        // F-03: prefer PID liveness over the coarse 30s mtime TTL so a crashed
+        // holder doesn't wedge every other op for the full TTL. BUT only reclaim
+        // on POSITIVE proof of death (a valid pid that no longer exists → ESRCH).
+        // An unparseable/empty body is NOT proof of death — it is most likely a
+        // lock that was just created via open("wx") whose pid hasn't been written
+        // yet (a sub-millisecond window). Stealing it there let two acquirers run
+        // concurrently and collide in writeDB. Such a body falls back to the
+        // mtime TTL instead of being treated as a dead holder.
+        let holderDead = false;
+        const raw = await fs.readFile(lockPath, "utf-8").catch(() => "");
         let holderPid = NaN;
         try {
           holderPid = Number((JSON.parse(raw) as { pid?: unknown }).pid);
         } catch {
-          /* corrupt lock body → treat as no live holder */
+          /* unparseable / not-yet-written body → rely on the TTL, not death */
         }
-
-        let holderAlive = false;
         if (Number.isInteger(holderPid) && holderPid > 0) {
           try {
             process.kill(holderPid, 0);
-            holderAlive = true;
           } catch (e) {
             // ESRCH = no such process (dead). EPERM = alive but owned by another
-            // user — respect it rather than steal.
-            holderAlive = (e as NodeJS.ErrnoException).code !== "ESRCH";
+            // user — not dead, respect it.
+            holderDead = (e as NodeJS.ErrnoException).code === "ESRCH";
           }
         }
 
-        const stat = await fs.stat(lockPath);
-        const ttlExpired = Date.now() - stat.mtimeMs > LOCK_STALE_MS;
-
-        if (!holderAlive || ttlExpired) {
+        if (holderDead || ttlExpired) {
           await fs.unlink(lockPath);
           continue;
         }
       } catch {
-        // The lock disappeared between read/stat/unlink; retry immediately.
+        // The lock disappeared between stat/read/unlink; retry immediately.
         continue;
       }
 
@@ -163,7 +163,10 @@ async function readDB(): Promise<SessionsDB> {
 
 async function writeDB(db: SessionsDB): Promise<void> {
   await fs.mkdir(ccmuxDir(), { recursive: true });
-  const tmp = `${sessionsFile()}.tmp`;
+  // Unique temp name (pid + random) so even an unexpected concurrent writeDB
+  // can never have one call's rename remove the temp another is about to rename
+  // (the ENOENT-on-rename collision). The rename is the atomic publish.
+  const tmp = `${sessionsFile()}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
   // REL-05: write → fsync → rename so a crash/power-loss can't leave a
   // zero-length or partially-written sessions.json on filesystems that commit
   // the rename ahead of the file data; the rename is the atomic swap. fsync is
@@ -179,7 +182,12 @@ async function writeDB(db: SessionsDB): Promise<void> {
   } finally {
     await handle.close();
   }
-  await fs.rename(tmp, sessionsFile());
+  try {
+    await fs.rename(tmp, sessionsFile());
+  } catch (e) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw e;
+  }
 }
 
 export async function createSession(

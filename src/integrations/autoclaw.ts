@@ -104,7 +104,9 @@ export async function routeTask(prompt: string): Promise<{ taskId: string }> {
     const options: http.RequestOptions = {
       hostname: url.hostname,
       port: url.port ? Number(url.port) : undefined,
-      path: url.pathname,
+      // F-04: include the query string — `url.pathname` alone silently drops
+      // any `?key=…` carried by autoclaw.url.
+      path: url.pathname + url.search,
       method: "POST",
       headers: {
         "Content-Type": "application/json",

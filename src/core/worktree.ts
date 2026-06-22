@@ -177,7 +177,9 @@ export async function deleteWorktree(
   }
 
   try {
-    await execa("git", ["-C", projectPath, "worktree", "remove", wtPath, "--force"], {
+    // SEC-03: `--` terminates option parsing so the worktree path can never be
+    // read as a git flag (CVE-2024-35241 class); --force must precede it.
+    await execa("git", ["-C", projectPath, "worktree", "remove", "--force", "--", wtPath], {
       stdio: "pipe",
     });
   } catch {
@@ -192,7 +194,8 @@ export async function deleteWorktree(
 
   // Delete the branch if it still exists
   try {
-    await execa("git", ["-C", projectPath, "branch", "-d", branch], {
+    // SEC-03: `--` before the branch name closes the option-injection surface.
+    await execa("git", ["-C", projectPath, "branch", "-d", "--", branch], {
       stdio: "pipe",
     });
   } catch {

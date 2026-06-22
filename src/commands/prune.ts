@@ -78,11 +78,12 @@ async function deleteWorktreeForce(
   const fullWtPath = wtPath || `${WORKTREE_BASE}/${name}`;
   const branch = `ccmux/${name}`;
 
-  await execa("git", ["-C", projectPath, "worktree", "remove", fullWtPath, "--force"], {
+  // SEC-03: `--` (after --force) keeps a path/branch from being parsed as a flag.
+  await execa("git", ["-C", projectPath, "worktree", "remove", "--force", "--", fullWtPath], {
     stdio: "pipe",
   }).catch(() => {});
 
-  await execa("git", ["-C", projectPath, "branch", "-D", branch], {
+  await execa("git", ["-C", projectPath, "branch", "-D", "--", branch], {
     stdio: "pipe",
   }).catch(() => {});
 }

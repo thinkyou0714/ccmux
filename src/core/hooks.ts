@@ -368,19 +368,42 @@ if [ -z "$FILE_PATH" ]; then
   exit 0
 fi
 
-# Normalize to forward slashes and check prefix.
-ABS_PATH=$(echo "$FILE_PATH" | tr '\\\\' '/')
-if [ "$\{ABS_PATH#$WORKTREE}" != "$ABS_PATH" ]; then
-  # Starts with worktree → allow
-  exit 0
-fi
+# Canonicalize FILE_PATH and WORKTREE with node — guaranteed on PATH since the
+# extract helper above relies on it — and require the target to BE the worktree
+# root or sit strictly beneath it ("$WORKTREE" + path separator), not merely
+# share a string prefix (which let a sibling "<base>/<name>-evil" through).
+# path.resolve collapses ../ ./ and duplicate separators; realpathSync follows
+# symlinks. For a not-yet-created target (Write of a new file) we realpath the
+# nearest existing ancestor so an outward symlink in the path is still resolved.
+# Fail CLOSED: any error or a non-"inside" verdict blocks the write.
+INSIDE=$(node -e '
+  const path = require("path");
+  const fs = require("fs");
+  function canon(p) {
+    const abs = path.resolve(p);
+    try { return fs.realpathSync(abs); } catch {}
+    const tail = [];
+    let dir = abs;
+    for (;;) {
+      const parent = path.dirname(dir);
+      tail.unshift(path.basename(dir));
+      if (parent === dir) return abs;
+      try { return path.join(fs.realpathSync(parent), ...tail); } catch {}
+      dir = parent;
+    }
+  }
+  try {
+    const strip = (p) => p.replace(/[\\\\/]+$/, "");
+    const root = strip(canon(process.argv[1]));
+    const target = strip(canon(process.argv[2]));
+    if (target === root || target.startsWith(root + path.sep)) {
+      process.stdout.write("1");
+    }
+  } catch { /* empty output: fail closed */ }
+' "$WORKTREE" "$FILE_PATH" 2>/dev/null || true)
 
-# Try realpath if available (on Linux/WSL/macOS).
-if command -v realpath >/dev/null 2>&1; then
-  RP=$(realpath -m "$FILE_PATH" 2>/dev/null | tr '\\\\' '/' || true)
-  if [ -n "$RP" ] && [ "$\{RP#$WORKTREE}" != "$RP" ]; then
-    exit 0
-  fi
+if [ "$INSIDE" = "1" ]; then
+  exit 0
 fi
 
 echo "ccmux: write to '$FILE_PATH' blocked (outside worktree '$WORKTREE')" >&2

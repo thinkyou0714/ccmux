@@ -218,9 +218,14 @@ export async function listWorktrees(projectPath: string): Promise<WorktreeInfo[]
     const wtPath = lines.find((l) => l.startsWith("worktree "))?.slice(9) ?? "";
     const branch = lines.find((l) => l.startsWith("branch "))?.slice(7) ?? "";
 
-    if (!branch.includes(BRANCH_PREFIX)) continue;
+    // Only ccmux-managed worktrees: branches under `refs/heads/ccmux/`. The old
+    // `branch.includes("ccmux")` substring match also captured unrelated user
+    // branches that merely contained the word (e.g. `feature/ccmux-notes`),
+    // which could then be listed — and deleted — by ccmux as if it owned them.
+    const refPrefix = `refs/heads/${BRANCH_PREFIX}/`;
+    if (!branch.startsWith(refPrefix)) continue;
 
-    const name = branch.replace(`refs/heads/${BRANCH_PREFIX}/`, "");
+    const name = branch.slice(refPrefix.length);
     worktrees.push({ name, branch: branch.replace("refs/heads/", ""), path: wtPath, projectPath });
   }
 

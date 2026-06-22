@@ -85,12 +85,20 @@ async function obsidianRequest(
   });
 }
 
-function buildDefaultContent(data: HandoffData): string {
+/**
+ * BUG-04: fallback JPY/USD exchange rate when a HandoffData omits `exchangeRate`.
+ * Must match the config default (config/schema.ts DEFAULTS.cost.exchangeRate),
+ * which is 155 and is what close.ts passes — the previous literal here was 150,
+ * so an omitted rate rendered a JPY figure ~3% off from everywhere else.
+ */
+export const DEFAULT_JPY_EXCHANGE_RATE = 155;
+
+export function buildDefaultContent(data: HandoffData): string {
   const date = new Date().toISOString();
   const costLine =
     data.costUSD != null
       ? data.currency === "JPY"
-        ? `- cost: ¥${Math.round(data.costUSD * (data.exchangeRate ?? 150))}`
+        ? `- cost: ¥${Math.round(data.costUSD * (data.exchangeRate ?? DEFAULT_JPY_EXCHANGE_RATE))}`
         : `- cost: $${data.costUSD.toFixed(3)}`
       : "";
 
@@ -127,7 +135,7 @@ function applyTemplate(template: string, data: HandoffData): string {
   const costStr =
     data.costUSD != null
       ? data.currency === "JPY"
-        ? `¥${Math.round(data.costUSD * (data.exchangeRate ?? 150))}`
+        ? `¥${Math.round(data.costUSD * (data.exchangeRate ?? DEFAULT_JPY_EXCHANGE_RATE))}`
         : `$${data.costUSD.toFixed(3)}`
       : "N/A";
 

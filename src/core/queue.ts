@@ -39,8 +39,20 @@ function dbPath(): string {
   return path.join(dir, "queue.db");
 }
 
+interface Stmts {
+  claimInsert: Database.Statement;
+  claimSelect: Database.Statement;
+  complete: Database.Statement;
+  release: Database.Statement;
+}
+
 let _db: Database.Database | null = null;
 let _dbPath: string | null = null;
+// PERF-01: prepared statements compiled once per connection. better-sqlite3's
+// documented best practice is to prepare a statement once and reuse it; the
+// previous code called db().prepare(...) on every claim/complete/release, which
+// re-compiles the SQL each time — wasteful under webhook bursts.
+let _stmts: Stmts | null = null;
 
 function db(): Database.Database {
   const want = dbPath();
@@ -49,6 +61,9 @@ function db(): Database.Database {
   if (_db) {
     try { _db.close(); } catch { /* ignore */ }
   }
+  // The connection is being (re)opened, so any statements cached against the old
+  // handle are now invalid.
+  _stmts = null;
   _dbPath = want;
   _db = new Database(want);
   _db.pragma("journal_mode = WAL");
@@ -60,6 +75,24 @@ function db(): Database.Database {
     completed_at TEXT
   )`);
   return _db;
+}
+
+function stmts(): Stmts {
+  // db() may reset _stmts to null if the connection was (re)opened — call it
+  // first, then prepare against the live handle on a cache miss.
+  const d = db();
+  if (_stmts) return _stmts;
+  _stmts = {
+    claimInsert: d.prepare(
+      "INSERT OR IGNORE INTO pending_sessions(key, source, created_at) VALUES(?, ?, ?)",
+    ),
+    claimSelect: d.prepare(
+      "SELECT source, created_at AS createdAt, completed_at AS completedAt FROM pending_sessions WHERE key = ?",
+    ),
+    complete: d.prepare("UPDATE pending_sessions SET completed_at = ? WHERE key = ?"),
+    release: d.prepare("DELETE FROM pending_sessions WHERE key = ?"),
+  };
+  return _stmts;
 }
 
 function disabled(): boolean {
@@ -79,17 +112,10 @@ export interface ClaimResult {
 export function claimSession(key: string, source: string): ClaimResult {
   if (disabled()) return { claimed: true };
   const now = new Date().toISOString();
-  const r = db()
-    .prepare(
-      "INSERT OR IGNORE INTO pending_sessions(key, source, created_at) VALUES(?, ?, ?)"
-    )
-    .run(key, source, now);
+  const s = stmts();
+  const r = s.claimInsert.run(key, source, now);
   if (r.changes > 0) return { claimed: true };
-  const existing = db()
-    .prepare(
-      "SELECT source, created_at AS createdAt, completed_at AS completedAt FROM pending_sessions WHERE key = ?"
-    )
-    .get(key) as
+  const existing = s.claimSelect.get(key) as
     | { source: string; createdAt: string; completedAt: string | null }
     | undefined;
   return { claimed: false, existing };
@@ -98,16 +124,14 @@ export function claimSession(key: string, source: string): ClaimResult {
 /** Mark the session as completed (close fired). Keeps the row for audit. */
 export function completeSession(key: string): void {
   if (disabled()) return;
-  db()
-    .prepare("UPDATE pending_sessions SET completed_at = ? WHERE key = ?")
-    .run(new Date().toISOString(), key);
+  stmts().complete.run(new Date().toISOString(), key);
 }
 
 /** Remove the session row entirely. Use when ccmux auto fails before close,
  *  so a manual re-trigger can claim the same key. */
 export function releaseSession(key: string): void {
   if (disabled()) return;
-  db().prepare("DELETE FROM pending_sessions WHERE key = ?").run(key);
+  stmts().release.run(key);
 }
 
 /** Test helper — close + drop the cached connection so the next call
@@ -118,4 +142,5 @@ export function _closeDbForTests(): void {
   }
   _db = null;
   _dbPath = null;
+  _stmts = null;
 }

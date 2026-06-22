@@ -75,4 +75,29 @@ describe("BL-6 SQLite dedup queue", () => {
     _closeDbForTests();
     await fs.rm(alt, { recursive: true, force: true });
   });
+
+  it("PERF-01: reuses cached statements across a burst and rebuilds them after a DB swap", async () => {
+    // Burst against one connection — every call reuses the cached statements.
+    for (let i = 0; i < 25; i++) {
+      expect(claimSession(`burst-${i}`, "github").claimed).toBe(true);
+    }
+    for (let i = 0; i < 25; i++) {
+      completeSession(`burst-${i}`);
+      expect(claimSession(`burst-${i}`, "github").existing?.completedAt).not.toBeNull();
+    }
+    for (let i = 0; i < 25; i++) {
+      releaseSession(`burst-${i}`);
+      expect(claimSession(`burst-${i}`, "github").claimed).toBe(true);
+    }
+
+    // Swap CCMUX_DIR → the connection reopens → statements cached against the
+    // old handle must be rebuilt against the new one (no stale-statement errors).
+    const alt = await fs.mkdtemp(path.join(os.tmpdir(), "ccmux-queue-perf-alt-"));
+    process.env.CCMUX_DIR = alt;
+    expect(claimSession("after-swap", "github").claimed).toBe(true);
+    completeSession("after-swap");
+    expect(claimSession("after-swap", "github").existing?.completedAt).not.toBeNull();
+    _closeDbForTests();
+    await fs.rm(alt, { recursive: true, force: true });
+  });
 });

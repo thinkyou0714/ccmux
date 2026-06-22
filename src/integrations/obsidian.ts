@@ -68,12 +68,15 @@ async function obsidianRequest(
         rejectUnauthorized: !cfg.allowInsecureTLS,
       },
       (res) => {
+        // F-10: drain the body BEFORE settling. resolve()/reject() return control
+        // to the caller synchronously, so calling res.resume() afterwards could
+        // leave an error-response body undrained and the socket pinned.
+        res.resume();
         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
           resolve();
         } else {
           reject(new Error(`Obsidian API returned ${res.statusCode}`));
         }
-        res.resume();
       }
     );
     req.on("error", reject);

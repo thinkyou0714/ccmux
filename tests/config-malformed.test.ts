@@ -71,4 +71,21 @@ describe("loadConfig malformed-config handling", () => {
 
     expect(err.get()).toBe("");
   });
+
+  it("coalesces a null / wrong-typed scalar field to its default (F-08)", async () => {
+    await fs.writeFile(
+      path.join(dir, "config.json"),
+      // worktreeBase:null would otherwise reach path.join(null, name) and crash;
+      // zellijSession is the wrong type; defaultProject is a valid override.
+      JSON.stringify({ worktreeBase: null, zellijSession: 42, defaultProject: "myproj" }),
+    );
+    const { loadConfig } = await import("../src/config/schema.js");
+    const cfg = await loadConfig();
+
+    expect(cfg.worktreeBase).not.toBeNull();
+    expect(typeof cfg.worktreeBase).toBe("string");
+    expect(typeof cfg.zellijSession).toBe("string");
+    expect(cfg.zellijSession).toBe("lab"); // default, not 42
+    expect(cfg.defaultProject).toBe("myproj"); // valid string still overrides
+  });
 });

@@ -123,6 +123,15 @@ export async function loadConfig(): Promise<CcmuxConfig> {
   _config = {
     ...DEFAULTS,
     ...parsed,
+    // F-08: `...parsed` copies an explicit null/wrong-typed scalar over the
+    // default. A `"worktreeBase": null` then reaches path.join(null, name) and
+    // throws a TypeError deep in createWorktree rather than being tolerated.
+    // Re-coalesce the scalar top-level fields by type so only a value of the
+    // right type can override the default.
+    version: typeof parsed.version === "number" ? parsed.version : DEFAULTS.version,
+    worktreeBase: typeof parsed.worktreeBase === "string" ? parsed.worktreeBase : DEFAULTS.worktreeBase,
+    zellijSession: typeof parsed.zellijSession === "string" ? parsed.zellijSession : DEFAULTS.zellijSession,
+    defaultProject: typeof parsed.defaultProject === "string" ? parsed.defaultProject : DEFAULTS.defaultProject,
     n8n: { ...DEFAULTS.n8n, ...parsed.n8n },
     obsidian: { ...DEFAULTS.obsidian, ...parsed.obsidian },
     autoclaw: { ...DEFAULTS.autoclaw, ...parsed.autoclaw },

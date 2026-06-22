@@ -38,13 +38,15 @@ afterEach(async () => {
 
 describe("listWorktrees (BUG-01: anchored prefix match)", () => {
   it("lists ccmux-managed worktrees and strips the prefix from the name", async () => {
-    const wt = await createWorktree("feature-a", repo, { worktreeBase });
+    await createWorktree("feature-a", repo, { worktreeBase });
     const list = await listWorktrees(repo);
 
-    const mine = list.find((w) => w.path === wt.path);
+    // Match on the parsed branch ref, not the filesystem path: git reports the
+    // realpath (e.g. macOS `/private/...`, Windows short/long forms) which never
+    // equals the path we joined locally.
+    const mine = list.find((w) => w.branch === "ccmux/feature-a");
     expect(mine).toBeDefined();
     expect(mine?.name).toBe("feature-a");
-    expect(mine?.branch).toBe("ccmux/feature-a");
   });
 
   it("does NOT list a user branch that merely contains 'ccmux' as a substring", async () => {
@@ -63,10 +65,11 @@ describe("listWorktrees (BUG-01: anchored prefix match)", () => {
     expect(names).toContain("mine");
     expect(branches).toContain("ccmux/mine");
 
-    // The decoy must not appear under any guise.
-    expect(list.some((w) => w.path === decoyPath)).toBe(false);
+    // The decoy must not appear under any guise. listWorktrees derives name and
+    // branch purely from the git ref, so a leaked decoy would surface here.
     expect(branches).not.toContain("feature/ccmux-notes");
     expect(names).not.toContain("feature/ccmux-notes");
+    expect(names).not.toContain("ccmux-notes");
   });
 
   it("does NOT list a branch named with a 'ccmux' prefix but no slash (e.g. ccmux-wip)", async () => {
@@ -76,7 +79,7 @@ describe("listWorktrees (BUG-01: anchored prefix match)", () => {
     await git("worktree", "add", "-b", "ccmux-wip", "--", decoyPath);
 
     const list = await listWorktrees(repo);
-    expect(list.some((w) => w.path === decoyPath)).toBe(false);
+    expect(list.map((w) => w.branch)).toContain("ccmux/real");
     expect(list.map((w) => w.branch)).not.toContain("ccmux-wip");
   });
 });

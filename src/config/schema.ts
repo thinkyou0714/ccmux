@@ -89,24 +89,47 @@ let _config: CcmuxConfig | null = null;
 
 export async function loadConfig(): Promise<CcmuxConfig> {
   if (_config) return _config;
+
+  let raw: string;
   try {
-    const raw = await fs.readFile(configFile(), "utf-8");
-    const parsed = JSON.parse(raw) as Partial<CcmuxConfig>;
-    // Per-section merge so a partial user config (e.g. {"n8n":{"enabled":true}})
-    // does not drop the other defaults of that section (webhookUrl/servePort/...).
-    _config = {
-      ...DEFAULTS,
-      ...parsed,
-      n8n: { ...DEFAULTS.n8n, ...parsed.n8n },
-      obsidian: { ...DEFAULTS.obsidian, ...parsed.obsidian },
-      autoclaw: { ...DEFAULTS.autoclaw, ...parsed.autoclaw },
-      cost: { ...DEFAULTS.cost, ...parsed.cost },
-      logs: { ...DEFAULTS.logs, ...parsed.logs },
-      projects: { ...DEFAULTS.projects, ...parsed.projects },
-    };
+    raw = await fs.readFile(configFile(), "utf-8");
   } catch {
+    // No config yet (first run) — use built-in defaults silently.
     _config = { ...DEFAULTS };
+    return _config;
   }
+
+  let parsed: Partial<CcmuxConfig>;
+  try {
+    const obj = JSON.parse(raw) as unknown;
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+      throw new Error("config root is not a JSON object");
+    }
+    parsed = obj as Partial<CcmuxConfig>;
+  } catch (err: unknown) {
+    // A malformed config used to be swallowed silently, so a single typo meant
+    // the CLI quietly ran with defaults (wrong project, wrong webhook port…)
+    // with no hint why. Surface it, then fall back to defaults so the CLI runs.
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      `ccmux: ${configFile()} is malformed (${msg}); using built-in defaults.\n`,
+    );
+    _config = { ...DEFAULTS };
+    return _config;
+  }
+
+  // Per-section merge so a partial user config (e.g. {"n8n":{"enabled":true}})
+  // does not drop the other defaults of that section (webhookUrl/servePort/...).
+  _config = {
+    ...DEFAULTS,
+    ...parsed,
+    n8n: { ...DEFAULTS.n8n, ...parsed.n8n },
+    obsidian: { ...DEFAULTS.obsidian, ...parsed.obsidian },
+    autoclaw: { ...DEFAULTS.autoclaw, ...parsed.autoclaw },
+    cost: { ...DEFAULTS.cost, ...parsed.cost },
+    logs: { ...DEFAULTS.logs, ...parsed.logs },
+    projects: { ...DEFAULTS.projects, ...parsed.projects },
+  };
   return _config;
 }
 

@@ -84,7 +84,7 @@ export async function pruneCommand(opts: PruneOptions): Promise<void> {
     }
   } catch (err: unknown) {
     spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
-    process.exit(1);
+    throw new Error(undefined, { cause: err });
   }
 }
 

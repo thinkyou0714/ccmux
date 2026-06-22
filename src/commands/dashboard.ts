@@ -91,7 +91,7 @@ export async function dashboardCommand(
   const sub = subcommand ?? "refresh";
   if (sub !== "refresh") {
     console.error(chalk.red(`Unknown dashboard subcommand: ${sub}`));
-    process.exit(1);
+    throw new Error();
   }
 
   const cfg = await loadConfig();

@@ -12,7 +12,7 @@ export async function swapCommand(projectKey: string): Promise<void> {
     for (const key of Object.keys(cfg.projects)) {
       console.error(`  ${key}`);
     }
-    process.exit(1);
+    throw new Error();
   }
 
   const spinner = ora(`Swapping context to "${projectKey}"...`).start();
@@ -40,6 +40,6 @@ export async function swapCommand(projectKey: string): Promise<void> {
     console.log(chalk.dim(`  default project is now "${projectKey}"`));
   } catch (err: unknown) {
     spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
-    process.exit(1);
+    throw new Error(undefined, { cause: err });
   }
 }

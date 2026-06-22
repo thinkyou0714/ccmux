@@ -174,7 +174,7 @@ export async function initCommand(opts: InitOptions = {}): Promise<void> {
   }
   if (steps.some((s) => !s.ok)) {
     console.log(chalk.red("\nLiteLLM bootstrap incomplete. See messages above and re-run."));
-    process.exit(1);
+    throw new Error();
   }
 
   console.log("");

@@ -39,21 +39,9 @@ describe("initCommand (Block D)", () => {
     await fs.mkdir(emptyBin, { recursive: true });
     process.env.PATH = emptyBin;
 
-    // initCommand calls process.exit(1) on failure — capture it.
-    const origExit = process.exit;
-    let exitCode: number | undefined;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (process as any).exit = (code?: number) => {
-      exitCode = code;
-      throw new Error("__exit__");
-    };
-    try {
-      await initCommand({ withLitellm: true }).catch((e) => {
-        if (!(e instanceof Error) || e.message !== "__exit__") throw e;
-      });
-    } finally {
-      process.exit = origExit;
-    }
-    expect(exitCode).toBe(1);
+    // F-02: initCommand now THROWS on an incomplete bootstrap (instead of
+    // process.exit), so the CLI boundary in index.ts turns it into exit 1 —
+    // and the failure path is testable without monkey-patching process.exit.
+    await expect(initCommand({ withLitellm: true })).rejects.toThrow();
   });
 });

@@ -240,6 +240,6 @@ export async function doctorCommand(): Promise<void> {
 
   if (criticalFail) {
     console.error(chalk.red("Required dependencies are missing. Please fix the issues above."));
-    process.exit(1);
+    throw new Error();
   }
 }

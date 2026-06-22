@@ -43,4 +43,22 @@ describe("session persistence locking", () => {
     expect(sessions.map((s) => s.name).sort()).toEqual(names.sort());
     expect(created.map((s) => s.name).sort()).toEqual(names.sort());
   });
+
+  it("reclaims a sessions lock held by a dead PID instead of waiting out the TTL (F-03)", async () => {
+    // A pid no process can hold → process.kill(pid, 0) throws ESRCH (dead holder).
+    const deadPid = 1 << 30;
+
+    // Pre-create the lock with the dead holder and a FRESH mtime, so the 30s
+    // mtime TTL alone would force a ~30s wait — only PID liveness reclaims it now.
+    const lockPath = path.join(tmp, "sessions.json.lock");
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: deadPid, createdAt: new Date().toISOString() }),
+    );
+
+    const t0 = Date.now();
+    const s = await createSession(sessionOpts("after-dead-lock"));
+    expect(Date.now() - t0).toBeLessThan(3000); // reclaimed promptly, not after ~30s
+    expect(s.name).toBe("after-dead-lock");
+  });
 });

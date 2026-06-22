@@ -72,6 +72,25 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
     const gitLog = await getGitLog(session.worktreePath);
     const todos = extractTodos(claudeMdContent);
 
+    // F-01: pre-flight the uncommitted-changes guard BEFORE closing the tab.
+    // closeTab must precede deleteWorktree (Windows can't remove a worktree dir
+    // a live terminal still holds open), but if deleteWorktree were the first to
+    // discover uncommitted changes we'd have already destroyed the user's tab
+    // for a close we then refuse. Checking here leaves the tab — and the
+    // uncommitted work — intact on refusal.
+    if (!opts.force) {
+      const { stdout: dirty } = await execa(
+        "git",
+        ["-C", session.worktreePath, "status", "--porcelain"],
+        { stdio: "pipe" },
+      ).catch(() => ({ stdout: "" }));
+      if (dirty.trim()) {
+        spinner.warn(chalk.yellow(`Worktree has uncommitted changes. Use --force to override.`));
+        await updateSession(session.id, { status: "error" });
+        throw new Error(`Worktree "${name}" has uncommitted changes. Use --force to override.`);
+      }
+    }
+
     spinner.text = "Closing terminal tab...";
     await closeTab(name);
 
@@ -82,14 +101,9 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
         force: opts.force,
       });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("uncommitted") && !opts.force) {
-        spinner.warn(chalk.yellow(`Worktree has uncommitted changes. Use --force to override.`));
-        await updateSession(session.id, { status: "error" });
-        throw new Error(`Worktree "${name}" has uncommitted changes. Use --force to override.`, {
-          cause: err,
-        });
-      }
+      // Uncommitted changes were already pre-checked above, so without --force
+      // any error here is unexpected — propagate it. With --force, worktree
+      // removal is best-effort (Windows handle quirks); don't fail over it.
       if (!opts.force) throw err;
     }
 
@@ -174,6 +188,9 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
     // exit 1. The `isSpinning` guard avoids double-printing when an inner branch
     // (e.g. the uncommitted-changes warn) already stopped the spinner.
     if (spinner.isSpinning) spinner.fail();
+    // F-01: release the per-session lock on failure too (the success path
+    // releases it below) so a refused/failed close doesn't leave the name locked.
+    await releaseLock(name).catch(() => {});
     throw err;
   }
 }

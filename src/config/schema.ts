@@ -113,6 +113,12 @@ export async function loadConfig(): Promise<CcmuxConfig> {
 export async function saveConfig(cfg: CcmuxConfig): Promise<void> {
   await fs.mkdir(ccmuxDir(), { recursive: true });
   await fs.writeFile(configFile(), JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  // DX-02: the `mode` above only applies when writeFile CREATES the file — an
+  // existing config keeps its old (possibly group/world-readable) permissions.
+  // Secrets live here (n8n.authToken/webhookSecret, obsidian.apiKey,
+  // autoclaw.authToken), so re-tighten to 0600 on every save. chmod is a
+  // near-no-op on Windows; never let it block a save.
+  await fs.chmod(configFile(), 0o600).catch(() => {});
   _config = cfg;
 }
 

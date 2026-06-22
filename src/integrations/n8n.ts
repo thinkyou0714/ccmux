@@ -181,23 +181,29 @@ async function handle(
     }
 
     if (isWebhook) {
+      // Read the raw body first so the HMAC is computed over the exact sender
+      // bytes — and so signature verification is the VERY FIRST gate.
+      const { raw, json: body } = await readBody(req);
+
+      // DX-03 + fail-closed (SEC): the webhook drives an autonomous
+      // `claude --dangerously-skip-permissions` run, so authentication must
+      // come before anything an unauthenticated caller could observe. Verifying
+      // the signature first means a caller can neither probe which events/actions
+      // are accepted nor reach the agent without a valid signature.
+      if (!webhookSecret) {
+        // No secret configured → the endpoint cannot authenticate anyone.
+        // Reject rather than accept unsigned input that spawns an agent.
+        return send(res, 503, { error: "Webhook signing not configured" });
+      }
+      const sig = req.headers["x-hub-signature-256"];
+      const sigStr = Array.isArray(sig) ? sig[0] : sig;
+      if (!verifyGitHubSignature(raw, sigStr, webhookSecret)) {
+        return send(res, 401, { error: "Invalid signature" });
+      }
+
       const event = req.headers["x-github-event"];
       if (event !== "issues") {
         return send(res, 200, { ok: false, reason: "not an issues event" });
-      }
-
-      // Read raw body *before* parsing so HMAC verification matches sender bytes.
-      const { raw, json: body } = await readBody(req);
-
-      // BL-1: HMAC signature gate. When webhookSecret is configured, every
-      // request must include a valid X-Hub-Signature-256 header. Missing
-      // secret = unauthenticated webhook (warned at startup).
-      if (webhookSecret) {
-        const sig = req.headers["x-hub-signature-256"];
-        const sigStr = Array.isArray(sig) ? sig[0] : sig;
-        if (!verifyGitHubSignature(raw, sigStr, webhookSecret)) {
-          return send(res, 401, { error: "Invalid signature" });
-        }
       }
 
       const action = body.action as string | undefined;
@@ -257,7 +263,9 @@ export async function startServer(portOverride?: number): Promise<{ port: number
     console.warn("WARNING: n8n.authToken is not set. /session/* endpoints are unauthenticated.");
   }
   if (!webhookSecret) {
-    console.warn("WARNING: n8n.webhookSecret is not set. /webhook/github accepts unsigned payloads (BL-1).");
+    console.warn(
+      "WARNING: n8n.webhookSecret is not set — /webhook/github is DISABLED (returns 503) until a secret is configured.",
+    );
   }
 
   const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
@@ -292,8 +300,14 @@ export async function startServer(portOverride?: number): Promise<{ port: number
     server.once("error", reject);
   });
 
+  // Report the actually-bound port. With portOverride/servePort of 0 the OS
+  // assigns an ephemeral port, so returning the requested `port` (0) would be
+  // wrong — read it back from the live socket.
+  const addr = server.address();
+  const boundPort = addr && typeof addr === "object" ? addr.port : port;
+
   return {
-    port,
+    port: boundPort,
     https: isHttps,
     close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
   };

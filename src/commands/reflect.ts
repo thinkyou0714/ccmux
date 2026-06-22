@@ -63,7 +63,7 @@ export async function reflectCommand(name: string, opts: ReflectOptions): Promis
     spinner.fail(chalk.red(`No log or handoff found for session "${name}".`));
     console.log(chalk.dim(`  Looked in: ${logFile}`));
     console.log(chalk.dim(`  Looked in: ${handoffsDir}/*-${name}.md`));
-    process.exit(1);
+    throw new Error();
   }
 
   // Truncate very large logs to last 50K chars to fit context

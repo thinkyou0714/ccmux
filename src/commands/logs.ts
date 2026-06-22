@@ -118,7 +118,7 @@ export async function logsCommand(name: string | undefined, opts: LogsOptions): 
 
   if (!name) {
     console.error(chalk.red("Session name required. Use --all to list all logs."));
-    process.exit(1);
+    throw new Error();
   }
 
   const logFile = await getLogFile(name);
@@ -135,7 +135,7 @@ export async function logsCommand(name: string | undefined, opts: LogsOptions): 
       }
     } else {
       console.error(chalk.red(`No log file or session found for "${name}".`));
-      process.exit(1);
+      throw new Error();
     }
     return;
   }

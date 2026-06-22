@@ -26,8 +26,7 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
   try {
     const session = await getSession(name);
     if (!session) {
-      spinner.fail(chalk.red(`Session "${name}" not found.`));
-      process.exit(1);
+      throw new Error(`Session "${name}" not found.`);
     }
 
     spinner.text = "Getting diff summary...";
@@ -83,7 +82,7 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
         spinner.warn(chalk.yellow(`Merge conflict detected — merge aborted.`));
         console.log(chalk.dim(`  Resolve manually in: ${session.worktreePath}`));
         console.log(chalk.dim(`  Then re-run: ccmux merge ${name} --target ${targetBranch}`));
-        process.exit(1);
+        throw new Error(undefined, { cause: err }); // conflict reported above; exit 1
       }
       throw err;
     }
@@ -98,8 +97,12 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
       await closeCommand(name, { handoff: true });
     }
   } catch (err: unknown) {
-    spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
-    process.exit(1);
+    // F-02/REL-01: surface the message once here, then throw so the index.ts
+    // CLI boundary exits 1 — instead of process.exit, which would kill an
+    // in-process caller (e.g. the serve daemon). Empty message = already shown.
+    const m = err instanceof Error ? err.message : String(err);
+    if (m) spinner.fail(chalk.red(m));
+    throw new Error(undefined, { cause: err });
   }
 }
 

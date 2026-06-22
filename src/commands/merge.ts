@@ -54,11 +54,19 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
       targetBranch ??= "main";
     }
 
+    // SEC-03: targetBranch can come from the user `--target` flag. `git checkout`
+    // has no option terminator (it reads `--`/`--end-of-options` as a pathspec),
+    // so guard against a leading-dash branch being parsed as a flag instead.
+    if (targetBranch.startsWith("-")) {
+      throw new Error(`refusing to merge into a branch whose name starts with '-': "${targetBranch}"`);
+    }
+
     const branch = `ccmux/${name}`;
     const mergeArgs = ["merge"];
     if (opts.squash) mergeArgs.push("--squash");
     if (opts.ff === false) mergeArgs.push("--no-ff");
-    mergeArgs.push(branch);
+    // SEC-03: `--` terminates options before the source branch name.
+    mergeArgs.push("--", branch);
 
     spinner.text = `Merging ${branch} into ${targetBranch}...`;
 

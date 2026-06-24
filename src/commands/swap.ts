@@ -2,6 +2,7 @@ import chalk from "chalk";
 import ora from "ora";
 import fs from "fs/promises";
 import { loadConfig } from "../config/schema.js";
+import { toErrorMessage } from "../core/errors.js";
 
 export async function swapCommand(projectKey: string): Promise<void> {
   const cfg = await loadConfig();
@@ -39,7 +40,7 @@ export async function swapCommand(projectKey: string): Promise<void> {
     spinner.succeed(chalk.green(`Context switched to "${projectKey}"`));
     console.log(chalk.dim(`  default project is now "${projectKey}"`));
   } catch (err: unknown) {
-    spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
+    spinner.fail(chalk.red(toErrorMessage(err)));
     process.exit(1);
   }
 }

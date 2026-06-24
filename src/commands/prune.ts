@@ -2,6 +2,7 @@ import chalk from "chalk";
 import ora from "ora";
 import { pruneOrphanedSessions, listSessions, updateSession } from "../core/session.js";
 import { deleteWorktree } from "../core/worktree.js";
+import { toErrorMessage } from "../core/errors.js";
 import { loadConfig } from "../config/schema.js";
 
 export interface PruneOptions {
@@ -51,7 +52,7 @@ export async function pruneCommand(opts: PruneOptions): Promise<void> {
         await updateSession(s.id, { status: "closed" });
         removed++;
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = toErrorMessage(err);
         removeSpinner.warn(chalk.yellow(`  Skipped "${s.name}": ${msg}`));
         removeSpinner.start();
       }
@@ -59,7 +60,7 @@ export async function pruneCommand(opts: PruneOptions): Promise<void> {
 
     removeSpinner.succeed(chalk.green(`Pruned ${removed} orphaned session(s).`));
   } catch (err: unknown) {
-    spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
+    spinner.fail(chalk.red(toErrorMessage(err)));
     process.exit(1);
   }
 }

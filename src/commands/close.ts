@@ -6,14 +6,11 @@ import { execa } from "execa";
 import { getSession, updateSession } from "../core/session.js";
 import { deleteWorktree, getWorktreeDiff } from "../core/worktree.js";
 import { closeTab } from "../core/zellij.js";
-import { releaseLock } from "../core/lock.js";
+import { ccmuxDir, releaseLock } from "../core/lock.js";
+import { toErrorMessage } from "../core/errors.js";
 import { loadConfig } from "../config/schema.js";
 import { writeObsidianHandoff, exportSessionForDashboard } from "../integrations/obsidian.js";
 import { completeSession } from "../core/queue.js";
-
-function ccmuxDir(): string {
-  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
-}
 
 export interface CloseOptions {
   force?: boolean;
@@ -75,7 +72,7 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
         force: opts.force,
       });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = toErrorMessage(err);
       if (msg.includes("uncommitted") && !opts.force) {
         spinner.warn(chalk.yellow(`Worktree has uncommitted changes. Use --force to override.`));
         await updateSession(session.id, { status: "error" });

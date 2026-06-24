@@ -4,10 +4,7 @@ import path from "path";
 import { execa } from "execa";
 import { loadConfig } from "../config/schema.js";
 import { getSession } from "../core/session.js";
-
-function ccmuxDir(): string {
-  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
-}
+import { ccmuxDir } from "../core/lock.js";
 
 export interface LogsOptions {
   follow?: boolean;

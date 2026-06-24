@@ -1,5 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
+import { toErrorMessage } from "./errors.js";
 
 export function ccmuxDir(): string {
   return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
@@ -41,7 +42,7 @@ export async function acquireLock(name: string): Promise<void> {
         }
       }
     } catch (innerErr: unknown) {
-      const msg = innerErr instanceof Error ? innerErr.message : String(innerErr);
+      const msg = toErrorMessage(innerErr);
       if (msg.includes("already running")) throw innerErr;
       throw err;
     }

@@ -3,6 +3,7 @@ import ora from "ora";
 import { execa } from "execa";
 import { getSession } from "../core/session.js";
 import { getWorktreeDiff } from "../core/worktree.js";
+import { toErrorMessage } from "../core/errors.js";
 import { closeCommand } from "./close.js";
 
 export interface MergeOptions {
@@ -64,7 +65,7 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
         await execa("git", ["-C", session.projectPath, "commit", "-m", `ccmux: squash merge ${branch}`], { stdio: "pipe" });
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = toErrorMessage(err);
       if (msg.includes("CONFLICT") || msg.includes("conflict")) {
         await execa("git", ["-C", session.projectPath, "merge", "--abort"], { stdio: "pipe" }).catch(() => {});
         spinner.warn(chalk.yellow(`Merge conflict detected — merge aborted.`));
@@ -85,7 +86,7 @@ export async function mergeCommand(name: string, opts: MergeOptions): Promise<vo
       await closeCommand(name, { noHandoff: false });
     }
   } catch (err: unknown) {
-    spinner.fail(chalk.red(String(err instanceof Error ? err.message : err)));
+    spinner.fail(chalk.red(toErrorMessage(err)));
     process.exit(1);
   }
 }
@@ -108,7 +109,7 @@ async function createPullRequest(
   try {
     await execa("git", ["-C", projectPath, "push", "-u", "origin", branch], { stdio: "pipe" });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = toErrorMessage(err);
     console.log(chalk.yellow(`  Failed to push ${branch}: ${msg} — skipping PR creation`));
     return;
   }
@@ -121,7 +122,7 @@ async function createPullRequest(
     const { stdout } = await execa("gh", prArgs, { cwd: projectPath, stdio: "pipe" });
     console.log(chalk.green(`  PR created: ${stdout.trim()}`));
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = toErrorMessage(err);
     console.log(chalk.yellow(`  PR creation failed: ${msg}`));
   }
 }

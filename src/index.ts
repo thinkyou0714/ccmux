@@ -15,6 +15,7 @@ import { reflectCommand } from "./commands/reflect.js";
 import { initCommand } from "./commands/init.js";
 import { dashboardCommand } from "./commands/dashboard.js";
 import { initConfig } from "./config/schema.js";
+import { toErrorMessage } from "./core/errors.js";
 
 const program = new Command();
 
@@ -175,7 +176,7 @@ program
 // calling process.exit, which would kill the in-process serve daemon). Here at
 // the CLI boundary we turn a thrown error into a printed message + exit 1.
 program.parseAsync(process.argv).catch((err: unknown) => {
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = toErrorMessage(err);
   if (msg) console.error(chalk.red(msg));
   process.exit(1);
 });

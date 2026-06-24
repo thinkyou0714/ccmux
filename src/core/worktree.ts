@@ -1,6 +1,7 @@
 import { execa } from "execa";
 import path from "path";
 import fs from "fs/promises";
+import { toErrorMessage } from "./errors.js";
 
 export interface WorktreeInfo {
   name: string;
@@ -83,7 +84,7 @@ export async function createWorktree(
     });
   } catch (err: unknown) {
     // Branch might already exist — try without -b
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = toErrorMessage(err);
     if (msg.includes("already exists")) {
       await execa("git", ["-C", projectPath, "worktree", "add", "--", wtPath, branch], {
         stdio: "pipe",
@@ -137,7 +138,7 @@ export async function applyWorktreeInclude(
       result.copied.push(rel);
     } catch (err: unknown) {
       result.missing.push(rel);
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = toErrorMessage(err);
       process.stderr.write(
         `ccmux: .worktreeinclude — could not copy "${rel}" (${msg.slice(0, 100)})\n`,
       );
@@ -169,7 +170,7 @@ export async function deleteWorktree(
         );
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = toErrorMessage(err);
       if (!msg.includes("uncommitted")) throw err;
       // Re-throw the uncommitted changes error
       throw err;

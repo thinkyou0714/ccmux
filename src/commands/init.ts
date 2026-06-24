@@ -3,6 +3,7 @@ import { execa } from "execa";
 import fs from "fs/promises";
 import path from "path";
 import { initConfig, loadConfig, saveConfig } from "../config/schema.js";
+import { toErrorMessage } from "../core/errors.js";
 
 export interface InitOptions {
   withLitellm?: boolean;
@@ -103,7 +104,7 @@ async function bootstrapLitellm(opts: InitOptions): Promise<BootstrapResult[]> {
       await execa(pyExe, [...pyArgs, "-m", "venv", venvDir()], { stdio: "pipe" });
       results.push({ ok: true, step: "venv create", detail: venvDir() });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = toErrorMessage(e);
       results.push({ ok: false, step: "venv create", detail: msg });
       return results;
     }
@@ -116,7 +117,7 @@ async function bootstrapLitellm(opts: InitOptions): Promise<BootstrapResult[]> {
       await execa(pipExe, ["install", "litellm[proxy]"], { stdio: "pipe", timeout: 300_000 });
       results.push({ ok: true, step: "pip install litellm[proxy]" });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = toErrorMessage(e);
       results.push({ ok: false, step: "pip install litellm[proxy]", detail: msg });
       return results;
     }
@@ -148,7 +149,7 @@ async function bootstrapLitellm(opts: InitOptions): Promise<BootstrapResult[]> {
       results.push({ ok: true, step: "ccmux config", detail: `already ${targetUrl}` });
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = toErrorMessage(e);
     results.push({ ok: false, step: "ccmux config", detail: msg });
   }
 

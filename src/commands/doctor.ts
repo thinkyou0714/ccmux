@@ -4,10 +4,8 @@ import fs from "fs/promises";
 import path from "path";
 import { loadConfig } from "../config/schema.js";
 import { checkHealth } from "../integrations/autoclaw.js";
-
-function ccmuxDir(): string {
-  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
-}
+import { ccmuxDir } from "../core/lock.js";
+import { toErrorMessage } from "../core/errors.js";
 
 interface CheckResult {
   label: string;
@@ -78,7 +76,7 @@ async function checkConfig(): Promise<CheckResult> {
     JSON.parse(raw);
     return { label: `~/.ccmux/config.json exists and is valid`, ok: true };
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = toErrorMessage(err);
     return { label: "~/.ccmux/config.json", ok: false, detail: msg };
   }
 }
@@ -100,7 +98,7 @@ async function checkObsidian(): Promise<CheckResult | null> {
       detail: ok ? undefined : `HTTP ${res.status}`,
     };
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = toErrorMessage(err);
     return { label: `Obsidian API (${cfg.obsidian.baseUrl})`, ok: false, detail: msg };
   }
 }

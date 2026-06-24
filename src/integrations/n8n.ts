@@ -9,6 +9,7 @@ import { listSessions } from "../core/session.js";
 import { autoCommand } from "../commands/auto.js";
 import { claimSession, releaseSession } from "../core/queue.js";
 import { validateSessionName } from "../core/worktree.js";
+import { toErrorMessage } from "../core/errors.js";
 
 type JsonBody = Record<string, unknown>;
 
@@ -159,7 +160,8 @@ async function handle(
       try {
         validateSessionName(name);
       } catch (e) {
-        return send(res, 400, { error: e instanceof Error ? e.message : "invalid name" });
+        if (e instanceof Error) return send(res, 400, { error: e.message });
+        return send(res, 400, { error: "invalid name" });
       }
 
       await newCommand(name, { project, llm });
@@ -173,7 +175,8 @@ async function handle(
       try {
         validateSessionName(name);
       } catch (e) {
-        return send(res, 400, { error: e instanceof Error ? e.message : "invalid name" });
+        if (e instanceof Error) return send(res, 400, { error: e.message });
+        return send(res, 400, { error: "invalid name" });
       }
 
       await closeCommand(name, {});
@@ -231,7 +234,7 @@ async function handle(
         // Auto failed before close — drop the queue row so a manual
         // re-trigger isn't permanently blocked by the dedup gate.
         releaseSession(sessionName);
-        const message = cmdErr instanceof Error ? cmdErr.message : String(cmdErr);
+        const message = toErrorMessage(cmdErr);
         return send(res, 500, { error: message, sessionName });
       }
       return send(res, 200, { ok: true, sessionName });
@@ -242,7 +245,7 @@ async function handle(
     if (err instanceof PayloadTooLargeError) {
       return send(res, 413, { error: err.message });
     }
-    const message = err instanceof Error ? err.message : String(err);
+    const message = toErrorMessage(err);
     send(res, 500, { error: message });
   }
 }
@@ -262,7 +265,7 @@ export async function startServer(portOverride?: number): Promise<{ port: number
 
   const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
     handle(req, res, authToken, webhookSecret).catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = toErrorMessage(err);
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: message }));
     });

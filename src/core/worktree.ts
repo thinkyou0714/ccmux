@@ -25,7 +25,7 @@ export interface DeleteWorktreeOptions extends CreateWorktreeOptions {
    * Skip the pre-removal dirty worktree guard when true.
    * `git worktree remove` is still invoked with `--force` either way.
    */
-  force?: boolean;
+  force?: boolean | undefined;
 }
 
 const BRANCH_PREFIX = "ccmux";

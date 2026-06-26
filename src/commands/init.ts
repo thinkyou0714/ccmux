@@ -96,7 +96,7 @@ async function bootstrapLitellm(opts: InitOptions): Promise<BootstrapResult[]> {
 
     // Step 1b: create venv
     try {
-      const [pyExe, ...pyArgs] = py.split(" ");
+      const [pyExe = py, ...pyArgs] = py.split(" ");
       await execa(pyExe, [...pyArgs, "-m", "venv", venvDir()], { stdio: "pipe" });
       results.push({ ok: true, step: "venv create", detail: venvDir() });
     } catch (e) {

@@ -86,11 +86,22 @@ function parseTaskState(content: string): TaskState {
     goal,
     iteration: isNaN(iterCur) ? 0 : iterCur,
     maxIterations: isNaN(iterMax) ? 50 : iterMax,
-    status: (get("Status") as TaskState["status"]) || "running",
+    status: parseStatus(get("Status")),
     completedSteps: section("Completed Steps"),
     nextSteps: section("Next Steps"),
     lastUpdated: get("Last Updated"),
   };
+}
+
+const VALID_STATUSES: ReadonlyArray<TaskState["status"]> = ["running", "complete", "failed"];
+
+/** Coerce the parsed Status field to a known enum value. A hand-edited or
+ *  corrupt TASK_STATE.md must not smuggle an arbitrary string into the typed
+ *  field (the previous unchecked `as` cast did); unknown → "running". */
+function parseStatus(raw: string): TaskState["status"] {
+  return (VALID_STATUSES as readonly string[]).includes(raw)
+    ? (raw as TaskState["status"])
+    : "running";
 }
 
 /** Build the CLAUDE.md preamble that instructs the agent to manage TASK_STATE.md. */

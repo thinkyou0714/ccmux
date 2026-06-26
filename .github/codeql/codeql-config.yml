@@ -1,5 +1,20 @@
 name: "ccmux CodeQL config"
 
+# Scope analysis to the SHIPPED source. Only `src/` is compiled into the
+# published artifact (`dist/`, see package.json "files"); `tests/` is dev-only
+# and never shipped. The test suite intentionally does things that look risky to
+# a security scanner — most notably tests/n8n-handlers.test.ts stands up the
+# webhook server on a loopback (127.0.0.1) ephemeral port and fires real HTTP
+# requests at it. CodeQL's taint tracking follows the config.json read inside
+# startServer() to the bound port and reports js/file-access-to-http
+# ("outbound network request depends on file data") on the test — a false
+# positive: the request targets the server the test itself just started, on the
+# port it just bound; nothing is exfiltrated. Excluding tests removes this and
+# the rest of the test-only false-positive class while leaving full
+# security-extended coverage of src/ intact.
+paths-ignore:
+  - tests
+
 # Exclude js/user-controlled-bypass (CWE-807) for ccmux's webhook→agent flow.
 #
 # The /webhook/github endpoint deliberately turns an authenticated GitHub

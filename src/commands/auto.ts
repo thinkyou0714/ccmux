@@ -13,8 +13,7 @@ import { buildClaudeEnv } from "../integrations/autoclaw.js";
 import type { CcmuxConfig } from "../config/schema.js";
 import { writeTaskState, taskStateClaudioPreamble } from "../core/taskstate.js";
 import { installSessionHooks } from "../core/hooks.js";
-
-const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
+import { handoffsDir, logsDir } from "../core/paths.js";
 
 function autoName(): string {
   const hhmm = new Date().toTimeString().slice(0, 5).replace(":", "");
@@ -32,12 +31,12 @@ export interface AutoOptions {
 
 export async function autoCommand(name?: string, opts: AutoOptions = {}): Promise<void> {
   if (opts.resume && !opts.prompt) {
-    const handoffsDir = path.join(CCMUX_DIR, "handoffs");
+    const handoffs = handoffsDir();
     try {
-      const files = await fs.readdir(handoffsDir);
+      const files = await fs.readdir(handoffs);
       const matches = files.filter((f) => f.endsWith(`-${opts.resume}.md`)).sort();
       if (matches.length > 0) {
-        const latest = path.join(handoffsDir, matches[matches.length - 1]);
+        const latest = path.join(handoffs, matches[matches.length - 1]);
         const content = await fs.readFile(latest, "utf-8");
         opts.prompt = `前セッション ${opts.resume} の続きです:\n\n${content}`;
       }
@@ -131,7 +130,7 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
     } else {
       // Outside Zellij — daemon mode
       if (opts.prompt) {
-        const logDir = path.join(CCMUX_DIR, "logs");
+        const logDir = logsDir();
         await fs.mkdir(logDir, { recursive: true });
         const logFile = path.join(logDir, `${sessionName}.log`);
 

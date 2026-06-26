@@ -66,6 +66,40 @@ As a last-resort escape hatch you can set `"obsidian": { "allowInsecureTLS": tru
 in the config (default `false`). This skips certificate validation and logs a
 warning on every request — only use it on a trusted local network.
 
+### Copy untracked files into each worktree (`.worktreeinclude`)
+
+A git worktree starts without your gitignored files (`.env`, local secrets, IDE
+config). Put a `.worktreeinclude` (gitignore-style: one path per line, `#`
+comments, no globs) in your **project root** and ccmux copies each listed file
+into the new worktree at the same relative path. Entries that resolve outside
+the project or the worktree are refused.
+
+```
+.env
+config/secrets.json
+.vscode/settings.json
+```
+
+## Environment variables
+
+Most configuration lives in `~/.ccmux/config.json`; these env vars override or
+supplement it (useful for tests, CI, and one-off runs). Precedence varies by
+row — see the Default column (e.g. `OBSIDIAN_*` win over config, while
+`CCMUX_WORKTREE_BASE` is only a fallback after `cfg.worktreeBase`):
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `CCMUX_DIR` | ccmux state directory (config, sessions, locks, logs, handoffs, queue) | `~/.ccmux` |
+| `CCMUX_WORKTREE_BASE` | Base directory for created worktrees | `cfg.worktreeBase` → `~/worktrees` |
+| `CCMUX_QUEUE_DISABLED` | `1` disables the SQLite webhook dedup queue (every claim wins) | unset |
+| `CCMUX_SEND_DELAY_MS` | Grace period (ms) before typing the prompt into a freshly opened tab | `3000` |
+| `CCMUX_TIMEZONE` | IANA zone for bucketing daily cost (matches `ccusage`) | system zone |
+| `CCMUX_WEBHOOK_ALLOW_UNSANDBOXED` | `1` lets webhook-triggered autonomous runs skip the bubblewrap sandbox — runs untrusted issue text under `--dangerously-skip-permissions` (**not recommended**) | unset (sandbox required) |
+| `OBSIDIAN_BASE_URL` / `OBSIDIAN_API_KEY` | Override the Obsidian REST endpoint / key at runtime | from config |
+| `CLAUDE_CONFIG_DIR` | Where `ccusage` reads Claude usage data (auto-resolved under WSL2) | auto |
+| `ZELLIJ_BIN` | Path to the `zellij` binary | `~/.local/bin/zellij` |
+| `NODE_EXTRA_CA_CERTS` | Extra CA bundle to trust a self-signed Obsidian cert (see above) | unset |
+
 ## Requirements
 
 - Node.js ≥ 22

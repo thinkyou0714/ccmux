@@ -31,9 +31,12 @@ class PayloadTooLargeError extends Error {
 
 function readBody(req: http.IncomingMessage): Promise<RawBody> {
   return new Promise((resolve, reject) => {
-    // Reject an oversized Content-Length before reading a single byte.
+    // Reject an oversized Content-Length before reading a single byte. Compare
+    // directly so a non-finite header (`Infinity`) trips the guard too; a NaN
+    // (unparseable/absent) is `NaN > MAX` === false and falls through to the
+    // streaming byte-counter below, which bounds the body regardless.
     const declared = Number(req.headers["content-length"] ?? "0");
-    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    if (declared > MAX_BODY_BYTES) {
       req.destroy();
       reject(new PayloadTooLargeError());
       return;

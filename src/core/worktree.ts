@@ -1,6 +1,7 @@
 import { execa } from "execa";
 import path from "path";
 import fs from "fs/promises";
+import { homeDir } from "./paths.js";
 
 export interface WorktreeInfo {
   name: string;
@@ -54,7 +55,7 @@ export function resolveWorktreeBase(override?: string): string {
   return (
     override ??
     process.env.CCMUX_WORKTREE_BASE ??
-    `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/worktrees`
+    `${homeDir()}/worktrees`
   );
 }
 

@@ -28,7 +28,10 @@ export async function checkHealth(): Promise<AutoclawHealth> {
     const req = http.get(healthUrl, { timeout: 3000 }, (res) => {
       res.resume(); // consume response body
       const latencyMs = Date.now() - start;
-      resolve({ available: res.statusCode === 200, url, latencyMs });
+      // Any 2xx means reachable — a proxy may answer /health with 204/200/etc.
+      // (mirrors the 2xx check in routeTask below).
+      const code = res.statusCode ?? 0;
+      resolve({ available: code >= 200 && code < 300, url, latencyMs });
     });
     req.on("error", (err) => resolve({ available: false, url, error: err.message }));
     req.on("timeout", () => {

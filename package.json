@@ -6,12 +6,17 @@
   "bin": {
     "ccmux": "./dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "lint": "eslint src tests",
-    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "check": "npm run typecheck && npm run lint && npm run build && npm run test",
+    "prepublishOnly": "npm run check"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",

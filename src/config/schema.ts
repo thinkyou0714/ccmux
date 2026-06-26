@@ -1,15 +1,5 @@
 import fs from "fs/promises";
-import path from "path";
-
-// Phase: 90-pt roadmap — lazy resolution so tests can swap CCMUX_DIR / HOME
-// after module load. Capturing these at module scope was forcing every test
-// that touches config to monkey-patch fs.
-function ccmuxDir(): string {
-  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
-}
-function configFile(): string {
-  return path.join(ccmuxDir(), "config.json");
-}
+import { ccmuxDir, configFile } from "../core/paths.js";
 
 export interface ProjectConfig {
   path: string;

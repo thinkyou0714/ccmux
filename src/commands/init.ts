@@ -3,6 +3,7 @@ import { execa } from "execa";
 import fs from "fs/promises";
 import path from "path";
 import { initConfig, loadConfig, saveConfig } from "../config/schema.js";
+import { homeDir } from "../core/paths.js";
 
 export interface InitOptions {
   withLitellm?: boolean;
@@ -13,15 +14,11 @@ export interface InitOptions {
 }
 
 const DEFAULT_LITELLM_PORT = 4101;
-// Lazy resolution so tests can swap HOME / USERPROFILE between cases.
-function home(): string {
-  return process.env.HOME ?? process.env.USERPROFILE ?? "";
-}
 function venvDir(): string {
-  return path.join(home(), ".claude", "litellm-venv");
+  return path.join(homeDir(), ".claude", "litellm-venv");
 }
 function localLitellmConfig(): string {
-  return path.join(home(), ".claude", "litellm-config.yaml");
+  return path.join(homeDir(), ".claude", "litellm-config.yaml");
 }
 
 const MINIMAL_LITELLM_CONFIG = `model_list:
@@ -181,7 +178,7 @@ export async function initCommand(opts: InitOptions = {}): Promise<void> {
   console.log(chalk.green("LiteLLM bootstrap complete."));
   console.log(chalk.dim("Start the proxy with:"));
   if (process.platform === "win32") {
-    console.log(chalk.dim(`  pwsh -File ${path.join(home(), ".claude", "scripts", "start_litellm_proxy.ps1")} -Background -Port ${opts.litellmPort ?? DEFAULT_LITELLM_PORT} -Config ${localLitellmConfig()}`));
+    console.log(chalk.dim(`  pwsh -File ${path.join(homeDir(), ".claude", "scripts", "start_litellm_proxy.ps1")} -Background -Port ${opts.litellmPort ?? DEFAULT_LITELLM_PORT} -Config ${localLitellmConfig()}`));
   } else {
     console.log(chalk.dim(`  ${venvLitellmExe()} --config ${localLitellmConfig()} --port ${opts.litellmPort ?? DEFAULT_LITELLM_PORT} &`));
   }

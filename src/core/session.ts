@@ -1,13 +1,6 @@
 import fs from "fs/promises";
-import path from "path";
 import { randomUUID } from "crypto";
-
-function ccmuxDir(): string {
-  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
-}
-function sessionsFile(): string {
-  return path.join(ccmuxDir(), "sessions.json");
-}
+import { ccmuxDir, sessionsFile } from "./paths.js";
 
 function sessionsLockPath(): string {
   return `${sessionsFile()}.lock`;

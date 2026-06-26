@@ -100,7 +100,7 @@ function disabled(): boolean {
 
 export interface ClaimResult {
   claimed: boolean;
-  existing?: { source: string; createdAt: string; completedAt: string | null };
+  existing?: { source: string; createdAt: string; completedAt: string | null } | undefined;
 }
 
 /**

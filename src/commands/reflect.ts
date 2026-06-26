@@ -48,10 +48,11 @@ export async function reflectCommand(name: string, opts: ReflectOptions): Promis
       const files = (await fs.readdir(handoffs))
         .filter((f) => f.endsWith(`-${name}.md`))
         .sort();
-      if (files.length > 0) {
-        const latest = path.join(handoffs, files[files.length - 1]);
-        sourceText = await fs.readFile(latest, "utf-8");
-        sourceLabel = latest;
+      const latest = files.at(-1);
+      if (latest) {
+        const latestPath = path.join(handoffs, latest);
+        sourceText = await fs.readFile(latestPath, "utf-8");
+        sourceLabel = latestPath;
       }
     } catch {
       // ignore

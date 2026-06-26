@@ -14,9 +14,9 @@ let tmp: string;
 const origEnv = { ...process.env };
 
 interface Resp {
-  status?: number;
+  status?: number | undefined;
   json?: unknown;
-  error?: boolean;
+  error?: boolean | undefined;
 }
 
 /** Fire one request at the loopback server. Never rejects: a socket error

@@ -84,8 +84,8 @@ function parseTaskState(content: string): TaskState {
   return {
     sessionName: get("Session"),
     goal,
-    iteration: isNaN(iterCur) ? 0 : iterCur,
-    maxIterations: isNaN(iterMax) ? 50 : iterMax,
+    iteration: iterCur === undefined || isNaN(iterCur) ? 0 : iterCur,
+    maxIterations: iterMax === undefined || isNaN(iterMax) ? 50 : iterMax,
     status: parseStatus(get("Status")),
     completedSteps: section("Completed Steps"),
     nextSteps: section("Next Steps"),

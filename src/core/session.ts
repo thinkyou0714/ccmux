@@ -101,7 +101,7 @@ export interface Session {
   projectPath: string;
   zellijTab: string;
   status: SessionStatus;
-  pid?: number;
+  pid?: number | undefined;
   createdAt: string;
   updatedAt: string;
   costUSD: number;
@@ -210,10 +210,12 @@ export async function updateSession(
   return withSessionLock(async () => {
     const db = await readDB();
     const idx = db.sessions.findIndex((s) => s.id === id);
-    if (idx === -1) throw new Error(`Session ${id} not found`);
-    db.sessions[idx] = { ...db.sessions[idx], ...patch, updatedAt: new Date().toISOString() };
+    const existing = db.sessions[idx];
+    if (idx === -1 || !existing) throw new Error(`Session ${id} not found`);
+    const updated = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+    db.sessions[idx] = updated;
     await writeDB(db);
-    return db.sessions[idx];
+    return updated;
   });
 }
 

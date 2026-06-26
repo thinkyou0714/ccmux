@@ -1,13 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
+import { locksDir } from "./paths.js";
 
-export function ccmuxDir(): string {
-  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
-}
-
-export function locksDir(): string {
-  return path.join(ccmuxDir(), "locks");
-}
+// Re-exported so existing importers (and tests) can keep resolving the locks
+// directory from this module; the canonical definition now lives in paths.ts.
+export { locksDir };
 
 function lockPath(name: string): string {
   return path.join(locksDir(), `${name}.lock`);

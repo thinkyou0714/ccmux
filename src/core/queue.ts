@@ -29,11 +29,10 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import { ccmuxDir } from "./paths.js";
 
 function dbPath(): string {
-  const dir =
-    process.env.CCMUX_DIR ??
-    `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
+  const dir = ccmuxDir();
   // Ensure parent dir exists for the very first connection (sqlite errors otherwise).
   fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, "queue.db");

@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import ora from "ora";
 import { pruneOrphanedSessions, listSessions, updateSession } from "../core/session.js";
-import { deleteWorktree } from "../core/worktree.js";
+import { deleteWorktree, resolveWorktreeBase } from "../core/worktree.js";
 import { loadConfig } from "../config/schema.js";
 
 export interface PruneOptions {
@@ -95,11 +95,10 @@ async function deleteWorktreeForce(
   worktreeBase?: string,
 ): Promise<void> {
   const { execa } = await import("execa");
-  // Resolution order mirrors core/worktree.resolveWorktreeBase:
-  //   1. cfg.worktreeBase (passed by caller)  2. CCMUX_WORKTREE_BASE env  3. ${HOME}/worktrees
-  const WORKTREE_BASE =
-    worktreeBase ?? process.env.CCMUX_WORKTREE_BASE ?? `${process.env.HOME}/worktrees`;
-  const fullWtPath = wtPath || `${WORKTREE_BASE}/${name}`;
+  // Reuse the canonical base resolver (cfg.worktreeBase → CCMUX_WORKTREE_BASE →
+  // ${HOME}/worktrees) instead of re-deriving it here, so the order — and the
+  // Windows USERPROFILE fallback — can't drift from createWorktree/deleteWorktree.
+  const fullWtPath = wtPath || `${resolveWorktreeBase(worktreeBase)}/${name}`;
   const branch = `ccmux/${name}`;
 
   // SEC-03: `--` (after --force) keeps a path/branch from being parsed as a flag.

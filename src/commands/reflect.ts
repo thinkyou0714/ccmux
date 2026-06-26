@@ -5,8 +5,7 @@ import path from "path";
 import { spawn } from "child_process";
 import { loadConfig } from "../config/schema.js";
 import { resolveClaudeModel } from "../integrations/autoclaw.js";
-
-const CCMUX_DIR = process.env.CCMUX_DIR ?? `${process.env.HOME}/.ccmux`;
+import { logsDir, handoffsDir } from "../core/paths.js";
 
 export interface ReflectOptions {
   apply?: boolean;
@@ -35,8 +34,8 @@ export async function reflectCommand(name: string, opts: ReflectOptions): Promis
   const spinner = ora(`Reflecting on session "${name}"...`).start();
 
   // Find the log file or handoff file
-  const logFile = path.join(CCMUX_DIR, "logs", `${name}.log`);
-  const handoffsDir = path.join(CCMUX_DIR, "handoffs");
+  const logFile = path.join(logsDir(), `${name}.log`);
+  const handoffs = handoffsDir();
   let sourceText: string | undefined;
   let sourceLabel = logFile;
 
@@ -46,11 +45,11 @@ export async function reflectCommand(name: string, opts: ReflectOptions): Promis
   } catch {
     // Fall back to latest handoff file
     try {
-      const files = (await fs.readdir(handoffsDir))
+      const files = (await fs.readdir(handoffs))
         .filter((f) => f.endsWith(`-${name}.md`))
         .sort();
       if (files.length > 0) {
-        const latest = path.join(handoffsDir, files[files.length - 1]);
+        const latest = path.join(handoffs, files[files.length - 1]);
         sourceText = await fs.readFile(latest, "utf-8");
         sourceLabel = latest;
       }
@@ -62,7 +61,7 @@ export async function reflectCommand(name: string, opts: ReflectOptions): Promis
   if (!sourceText) {
     spinner.fail(chalk.red(`No log or handoff found for session "${name}".`));
     console.log(chalk.dim(`  Looked in: ${logFile}`));
-    console.log(chalk.dim(`  Looked in: ${handoffsDir}/*-${name}.md`));
+    console.log(chalk.dim(`  Looked in: ${handoffs}/*-${name}.md`));
     throw new Error();
   }
 
@@ -78,7 +77,7 @@ export async function reflectCommand(name: string, opts: ReflectOptions): Promis
   const prompt = REFLECTION_PROMPT + sourceText + "\n---\n";
 
   // Write prompt to temp file to avoid shell injection
-  const tmpPromptFile = path.join(CCMUX_DIR, "logs", `.reflect-${name}.tmp`);
+  const tmpPromptFile = path.join(logsDir(), `.reflect-${name}.tmp`);
   await fs.mkdir(path.dirname(tmpPromptFile), { recursive: true });
   await fs.writeFile(tmpPromptFile, prompt, "utf-8");
 

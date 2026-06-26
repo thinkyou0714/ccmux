@@ -5,14 +5,7 @@ import {
   type SessionExportRecord,
 } from "../integrations/obsidian.js";
 import fs from "fs/promises";
-import path from "path";
-
-function ccmuxDir(): string {
-  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
-}
-function sessionsFile(): string {
-  return path.join(ccmuxDir(), "sessions.json");
-}
+import { sessionsFile } from "../core/paths.js";
 
 export interface DashboardOptions {
   /** When true, export ALL sessions in sessions.json. Default = false (last 7 days only). */

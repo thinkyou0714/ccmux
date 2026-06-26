@@ -1,13 +1,9 @@
 import chalk from "chalk";
 import { execa } from "execa";
 import fs from "fs/promises";
-import path from "path";
 import { loadConfig } from "../config/schema.js";
 import { checkHealth } from "../integrations/autoclaw.js";
-
-function ccmuxDir(): string {
-  return process.env.CCMUX_DIR ?? `${process.env.HOME ?? process.env.USERPROFILE ?? ""}/.ccmux`;
-}
+import { configFile } from "../core/paths.js";
 
 interface CheckResult {
   label: string;
@@ -72,22 +68,22 @@ async function checkCcusage(): Promise<CheckResult> {
 }
 
 export async function checkConfig(): Promise<CheckResult> {
-  const configFile = path.join(ccmuxDir(), "config.json");
+  const cfgFile = configFile();
   try {
-    const raw = await fs.readFile(configFile, "utf-8");
+    const raw = await fs.readFile(cfgFile, "utf-8");
     JSON.parse(raw);
     // DX-02: config.json holds secrets (n8n.authToken/webhookSecret,
     // obsidian.apiKey, autoclaw.authToken). On POSIX, flag a group/other-
     // accessible file — `ccmux init`/saveConfig write 0600, but a hand-created,
     // copied, or backup-restored file may be looser.
     if (process.platform !== "win32") {
-      const { mode } = await fs.stat(configFile);
+      const { mode } = await fs.stat(cfgFile);
       if (mode & 0o077) {
         const oct = (mode & 0o777).toString(8).padStart(3, "0");
         return {
           label: "~/.ccmux/config.json",
           ok: false,
-          detail: `holds secrets but is group/other-accessible (mode ${oct}); run: chmod 600 ${configFile}`,
+          detail: `holds secrets but is group/other-accessible (mode ${oct}); run: chmod 600 ${cfgFile}`,
         };
       }
     }

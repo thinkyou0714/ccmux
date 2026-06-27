@@ -58,6 +58,14 @@ describe("BL-2: destructive Bash blocklist", () => {
     expect(runHook(bashEvt("git push -f origin main")).exitCode).toBe(2);
   });
 
+  it("blocks git hook bypass flags", () => {
+    expect(runHook(bashEvt(`git commit --no-verify -m "x"`)).exitCode).toBe(2);
+    expect(runHook(bashEvt("git push --no-verify origin main")).exitCode).toBe(2);
+    expect(runHook(bashEvt("git merge --no-verify feature")).exitCode).toBe(2);
+    expect(runHook(bashEvt(`git commit -n -m "x"`)).exitCode).toBe(2);
+    expect(runHook(bashEvt(`git -c core.hooksPath=/dev/null commit -m "x"`)).exitCode).toBe(2);
+  });
+
   it("blocks docker compose up -d prod", () => {
     expect(runHook(bashEvt("docker compose up -d prod")).exitCode).toBe(2);
     expect(runHook(bashEvt("docker up -d production")).exitCode).toBe(2);
@@ -80,10 +88,37 @@ describe("BL-2: destructive Bash blocklist", () => {
     expect(runHook(bashEvt("rm file.txt")).exitCode).toBe(0); // not -rf /
   });
 
+  it("allows benign -n flags outside git commit", () => {
+    expect(runHook(bashEvt("echo -n hello")).exitCode).toBe(0);
+    expect(runHook(bashEvt("grep -n foo file")).exitCode).toBe(0);
+    expect(runHook(bashEvt("head -n 5 file")).exitCode).toBe(0);
+    expect(runHook(bashEvt("sort -n file")).exitCode).toBe(0);
+    expect(runHook(bashEvt("tail -n 5 file")).exitCode).toBe(0);
+  });
+
+  it("allows commit messages with no-verify as plain text", () => {
+    expect(runHook(bashEvt(`git commit -m "no-verify in message"`)).exitCode).toBe(0);
+  });
+
+  it("documents safety-biased block for --no-verify in commit messages", () => {
+    // The hook scans Bash text rather than parsing git arguments, so literal
+    // --no-verify after git commit is blocked even when it appears in -m text.
+    expect(runHook(bashEvt(`git commit -m "fix --no-verify docs"`)).exitCode).toBe(2);
+  });
+
   it("allows when CCMUX_BLOCKLIST_OVERRIDE=1 is set", () => {
     const r = runHook(bashEvt("git push --force origin main"), {
       CCMUX_BLOCKLIST_OVERRIDE: "1",
     });
     expect(r.exitCode).toBe(0);
+  });
+
+  it("warns when CCMUX_BLOCKLIST_OVERRIDE=1 allows a destructive command", () => {
+    const r = runHook(bashEvt("git push --force origin main"), {
+      CCMUX_BLOCKLIST_OVERRIDE: "1",
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toMatch(/ccmux BL-2: OVERRIDE active/);
+    expect(r.stderr).toContain("git push --force origin main");
   });
 });

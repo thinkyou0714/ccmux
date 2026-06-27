@@ -110,7 +110,10 @@ export async function loadConfig(): Promise<CcmuxConfig> {
 
 export async function saveConfig(cfg: CcmuxConfig): Promise<void> {
   await fs.mkdir(ccmuxDir(), { recursive: true });
-  await fs.writeFile(configFile(), JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  const file = configFile();
+  const tmp = `${file}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  await fs.rename(tmp, file);
   _config = cfg;
 }
 

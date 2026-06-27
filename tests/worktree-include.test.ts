@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -61,5 +61,40 @@ describe("applyWorktreeInclude (BL-B2)", () => {
     const r = await applyWorktreeInclude(proj, wt);
     expect(r.copied).toEqual([]);
     expect(r.missing).toEqual([]);
+  });
+
+  it("skips unsafe traversal and absolute include entries", async () => {
+    await fs.writeFile(path.join(proj, "safe.txt"), "SAFE=1");
+    await fs.writeFile(
+      path.join(proj, ".worktreeinclude"),
+      [
+        "safe.txt",
+        "../outside-secret.txt",
+        "nested/../secret.txt",
+        "/absolute-secret.txt",
+        "C:/absolute-secret.txt",
+      ].join("\n")
+    );
+
+    const warnings: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
+      warnings.push(String(chunk));
+      return true;
+    });
+
+    let r: Awaited<ReturnType<typeof applyWorktreeInclude>>;
+    try {
+      r = await applyWorktreeInclude(proj, wt);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(r.copied).toEqual(["safe.txt"]);
+    expect(r.missing).toEqual([]);
+    expect(await fs.readFile(path.join(wt, "safe.txt"), "utf-8")).toBe("SAFE=1");
+    expect(warnings.join("")).toContain('skipped unsafe path "../outside-secret.txt"');
+    expect(warnings.join("")).toContain('skipped unsafe path "nested/../secret.txt"');
+    expect(warnings.join("")).toContain('skipped unsafe path "/absolute-secret.txt"');
+    expect(warnings.join("")).toContain('skipped unsafe path "C:/absolute-secret.txt"');
   });
 });

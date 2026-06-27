@@ -77,8 +77,12 @@ function parseTaskState(content: string): TaskState {
   };
 
   const goalStart = lines.findIndex((l) => l.trim() === "## Goal");
-  const goalEnd = lines.findIndex((l, i) => i > goalStart + 1 && l.startsWith("## "));
-  const goalLines = goalEnd === -1 ? lines.slice(goalStart + 2) : lines.slice(goalStart + 2, goalEnd);
+  const goalEnd = goalStart === -1
+    ? -1
+    : lines.findIndex((l, i) => i > goalStart + 1 && l.startsWith("## "));
+  const goalLines = goalStart === -1
+    ? []
+    : goalEnd === -1 ? lines.slice(goalStart + 2) : lines.slice(goalStart + 2, goalEnd);
   const goal = goalLines.filter((l) => l.trim() && !l.startsWith("#")).join("\n").trim();
 
   return {

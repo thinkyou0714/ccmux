@@ -42,13 +42,17 @@ export async function checkHealth(): Promise<AutoclawHealth> {
  * Return the shell command prefix for a given LLM backend.
  * Centralises the `ANTHROPIC_BASE_URL=... claude` pattern used across commands.
  */
+export function shSingleQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 export async function resolveClaudeCmd(backend: "claude" | "autoclaw"): Promise<string> {
   if (backend !== "autoclaw") return "claude";
 
   const cfg = await loadConfig();
-  let cmd = `ANTHROPIC_BASE_URL="${cfg.autoclaw.url}" claude`;
+  let cmd = `ANTHROPIC_BASE_URL=${shSingleQuote(cfg.autoclaw.url)} claude`;
   if (cfg.autoclaw.model) {
-    cmd += ` --model ${cfg.autoclaw.model}`;
+    cmd += ` --model ${shSingleQuote(cfg.autoclaw.model)}`;
   }
   return cmd;
 }

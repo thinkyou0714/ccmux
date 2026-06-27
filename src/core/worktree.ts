@@ -59,6 +59,15 @@ export function resolveWorktreeBase(override?: string): string {
   );
 }
 
+export function isUnsafeWorktreeIncludePath(rel: string): boolean {
+  return (
+    rel.startsWith("/") ||
+    rel.startsWith("\\") ||
+    /^[A-Za-z]:/.test(rel) ||
+    rel.split(/[\\/]+/).some((seg) => seg === "..")
+  );
+}
+
 export async function createWorktree(
   name: string,
   projectPath: string,
@@ -130,6 +139,11 @@ export async function applyWorktreeInclude(
     .filter((l) => l.length > 0 && !l.startsWith("#"));
 
   for (const rel of entries) {
+    if (isUnsafeWorktreeIncludePath(rel)) {
+      process.stderr.write(`ccmux: .worktreeinclude — skipped unsafe path "${rel}"\n`);
+      continue;
+    }
+
     const src = path.join(projectPath, rel);
     const dst = path.join(wtPath, rel);
     try {

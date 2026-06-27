@@ -14,6 +14,11 @@ function lockPath(name: string): string {
   return path.join(locksDir(), `${name}.lock`);
 }
 
+async function replaceStaleLock(lp: string): Promise<void> {
+  await fs.unlink(lp);
+  await fs.writeFile(lp, String(process.pid), { flag: "wx", mode: 0o600 });
+}
+
 export async function acquireLock(name: string): Promise<void> {
   await fs.mkdir(locksDir(), { recursive: true });
   const lp = lockPath(name);
@@ -26,6 +31,10 @@ export async function acquireLock(name: string): Promise<void> {
     try {
       const existing = await fs.readFile(lp, "utf-8");
       const pid = parseInt(existing, 10);
+      if (!Number.isInteger(pid) || pid <= 0) {
+        await replaceStaleLock(lp);
+        return;
+      }
       try {
         process.kill(pid, 0);
         throw new Error(`Session "${name}" is already running (PID: ${pid})`, {
@@ -35,8 +44,7 @@ export async function acquireLock(name: string): Promise<void> {
         const isEsrch = (killErr as NodeJS.ErrnoException).code === "ESRCH";
         if (isEsrch) {
           // Stale lock — remove and retry
-          await fs.unlink(lp);
-          await fs.writeFile(lp, String(process.pid), { flag: "wx", mode: 0o600 });
+          await replaceStaleLock(lp);
         } else {
           throw killErr;
         }

@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { listSessions, pruneOrphanedSessions, type Session } from "../core/session.js";
 import { loadConfig } from "../config/schema.js";
-import { getTodayCost, formatCost } from "../core/cost.js";
+import { getTodayCost, formatCost, type CostCurrency } from "../core/cost.js";
 
 export interface ListOptions {
   all?: boolean;
@@ -30,11 +30,9 @@ function ago(isoDate: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-async function getCost(session: Session, exchangeRate: number, currency: string): Promise<string> {
+function getCost(session: Session, exchangeRate: number, currency: CostCurrency): string {
   if (session.costUSD === 0) return chalk.dim("N/A");
-  const amount = currency === "JPY" ? session.costUSD * exchangeRate : session.costUSD;
-  const sym = currency === "JPY" ? "¥" : "$";
-  return `${sym}${amount.toFixed(currency === "JPY" ? 0 : 3)}`;
+  return formatCost(session.costUSD, currency, exchangeRate);
 }
 
 export async function listCommand(opts: ListOptions): Promise<void> {
@@ -60,13 +58,8 @@ export async function listCommand(opts: ListOptions): Promise<void> {
   }
 
   if (cfg.cost.budgetUSD != null && todayCost && todayCost.costUSD > cfg.cost.budgetUSD) {
-    const sym = cfg.cost.currency === "JPY" ? "¥" : "$";
-    const spent = cfg.cost.currency === "JPY"
-      ? `${sym}${Math.round(todayCost.costUSD * cfg.cost.exchangeRate)}`
-      : `${sym}${todayCost.costUSD.toFixed(3)}`;
-    const budget = cfg.cost.currency === "JPY"
-      ? `${sym}${Math.round(cfg.cost.budgetUSD * cfg.cost.exchangeRate)}`
-      : `${sym}${cfg.cost.budgetUSD.toFixed(3)}`;
+    const spent = formatCost(todayCost.costUSD, cfg.cost.currency, cfg.cost.exchangeRate);
+    const budget = formatCost(cfg.cost.budgetUSD, cfg.cost.currency, cfg.cost.exchangeRate);
     console.log(chalk.yellow(`  ⚠  daily budget exceeded (${spent} / ${budget})`));
   }
 
@@ -90,10 +83,8 @@ export async function listCommand(opts: ListOptions): Promise<void> {
   console.log("\n" + header);
   console.log(chalk.dim("─".repeat(80)));
 
-  let _totalUSD = 0;
   for (const s of sessions) {
-    const cost = await getCost(s, cfg.cost.exchangeRate, cfg.cost.currency);
-    _totalUSD += s.costUSD;
+    const cost = getCost(s, cfg.cost.exchangeRate, cfg.cost.currency);
 
     const row = [
       s.name.padEnd(20),

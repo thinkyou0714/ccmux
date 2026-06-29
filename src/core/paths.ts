@@ -35,6 +35,10 @@ export function ccmuxDir(): string {
   return process.env.CCMUX_DIR ?? `${homeDir()}/.ccmux`;
 }
 
+export function claudeDir(): string {
+  return path.join(homeDir(), ".claude");
+}
+
 export function configFile(): string {
   return path.join(ccmuxDir(), "config.json");
 }

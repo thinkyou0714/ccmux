@@ -111,7 +111,14 @@ export async function getTotalCost(): Promise<number | null> {
   return data?.totals.totalCost ?? null;
 }
 
-export function formatCost(usd: number, currency: "JPY" | "USD", rate: number): string {
+export const DEFAULT_JPY_EXCHANGE_RATE = 155;
+export type CostCurrency = "JPY" | "USD";
+
+export function formatCost(
+  usd: number,
+  currency: CostCurrency = "USD",
+  rate = DEFAULT_JPY_EXCHANGE_RATE,
+): string {
   if (currency === "JPY") {
     return `¥${Math.round(usd * rate).toLocaleString()}`;
   }

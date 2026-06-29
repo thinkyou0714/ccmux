@@ -1,7 +1,9 @@
 import chalk from "chalk";
 import ora from "ora";
 import fs from "fs/promises";
+import path from "path";
 import { loadConfig } from "../config/schema.js";
+import { claudeDir } from "../core/paths.js";
 
 export async function swapCommand(projectKey: string): Promise<void> {
   const cfg = await loadConfig();
@@ -20,14 +22,14 @@ export async function swapCommand(projectKey: string): Promise<void> {
   try {
     // Copy CLAUDE.md if defined
     if (project.claudeMd) {
-      const dest = `${process.env.HOME}/.claude/CLAUDE.md`;
+      const dest = path.join(claudeDir(), "CLAUDE.md");
       await fs.copyFile(project.claudeMd, dest);
       spinner.text = `CLAUDE.md swapped from ${project.claudeMd}`;
     }
 
     // Copy settings.json if defined
     if (project.settings) {
-      const dest = `${process.env.HOME}/.claude/settings.json`;
+      const dest = path.join(claudeDir(), "settings.json");
       await fs.copyFile(project.settings, dest);
       spinner.text = `settings.json swapped from ${project.settings}`;
     }

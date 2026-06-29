@@ -11,6 +11,8 @@ import { loadConfig } from "../config/schema.js";
 import { writeObsidianHandoff, exportSessionForDashboard } from "../integrations/obsidian.js";
 import { completeSession } from "../core/queue.js";
 import { handoffsDir } from "../core/paths.js";
+import { formatCost } from "../core/cost.js";
+import { buildHandoffMarkdown, type HandoffMarkdownData } from "../core/handoff.js";
 
 export interface CloseOptions {
   force?: boolean;
@@ -170,11 +172,7 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
       }
     }
 
-    const sym = cfg.cost.currency === "JPY" ? "¥" : "$";
-    const cost =
-      cfg.cost.currency === "JPY"
-        ? `${sym}${Math.round(session.costUSD * cfg.cost.exchangeRate)}`
-        : `${sym}${session.costUSD.toFixed(3)}`;
+    const cost = formatCost(session.costUSD, cfg.cost.currency, cfg.cost.exchangeRate);
 
     spinner.succeed(chalk.green(`Session "${name}" closed`));
     console.log(`  total cost: ${cost}`);
@@ -192,46 +190,15 @@ export async function closeCommand(name: string, opts: CloseOptions): Promise<vo
   }
 }
 
-export async function writeLocalHandoff(data: {
-  sessionName: string;
-  branch: string;
-  diff: string;
-  claudeMdContent?: string;
-  todos?: string[];
-  gitLog?: string;
-}): Promise<void> {
+export async function writeLocalHandoff(data: HandoffMarkdownData): Promise<void> {
   const dir = handoffsDir();
   await fs.mkdir(dir, { recursive: true });
 
   const date = new Date().toISOString().slice(0, 10);
   const file = path.join(dir, `${date}-${data.sessionName}.md`);
 
-  const parts: string[] = [
-    `# ccmux handoff: ${data.sessionName}`,
-    ``,
-    `- date: ${new Date().toISOString()}`,
-    `- branch: ${data.branch}`,
-    ``,
-    `## diff summary`,
-    ``,
-    data.diff || "(no changes)",
-  ];
+  const content = buildHandoffMarkdown(data);
 
-  if (data.gitLog) {
-    parts.push(``, `## git log`, ``, `\`\`\``, data.gitLog, `\`\`\``);
-  }
-
-  if (data.todos && data.todos.length > 0) {
-    parts.push(``, `## todos`, ``);
-    for (const todo of data.todos) parts.push(`- [ ] ${todo}`);
-  }
-
-  if (data.claudeMdContent) {
-    parts.push(``, `## CLAUDE.md`, ``, data.claudeMdContent);
-  }
-
-  parts.push(``);
-
-  await fs.writeFile(file, parts.join("\n"), "utf-8");
+  await fs.writeFile(file, content, "utf-8");
   console.log(chalk.dim(`  handoff saved: ${file}`));
 }

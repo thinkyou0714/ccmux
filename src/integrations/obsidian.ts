@@ -1,6 +1,9 @@
 import https from "https";
 import http from "http";
 import fs from "fs/promises";
+import { formatCost } from "../core/cost.js";
+import { buildHandoffMarkdown, type HandoffMarkdownData } from "../core/handoff.js";
+export { DEFAULT_JPY_EXCHANGE_RATE } from "../core/cost.js";
 
 interface ObsidianConfig {
   baseUrl: string;
@@ -16,17 +19,7 @@ interface ObsidianConfig {
   allowInsecureTLS?: boolean;
 }
 
-export interface HandoffData {
-  sessionName: string;
-  branch: string;
-  diff: string;
-  costUSD?: number;
-  currency?: "JPY" | "USD";
-  exchangeRate?: number;
-  claudeMdContent?: string;
-  todos?: string[];
-  gitLog?: string;
-}
+export type HandoffData = HandoffMarkdownData;
 
 function resolveObsidianConfig(cfg: ObsidianConfig): ObsidianConfig {
   return {
@@ -88,59 +81,15 @@ async function obsidianRequest(
   });
 }
 
-/**
- * BUG-04: fallback JPY/USD exchange rate when a HandoffData omits `exchangeRate`.
- * Must match the config default (config/schema.ts DEFAULTS.cost.exchangeRate),
- * which is 155 and is what close.ts passes — the previous literal here was 150,
- * so an omitted rate rendered a JPY figure ~3% off from everywhere else.
- */
-export const DEFAULT_JPY_EXCHANGE_RATE = 155;
-
 export function buildDefaultContent(data: HandoffData): string {
-  const date = new Date().toISOString();
-  const costLine =
-    data.costUSD != null
-      ? data.currency === "JPY"
-        ? `- cost: ¥${Math.round(data.costUSD * (data.exchangeRate ?? DEFAULT_JPY_EXCHANGE_RATE))}`
-        : `- cost: $${data.costUSD.toFixed(3)}`
-      : "";
-
-  const parts: string[] = [
-    `# ccmux handoff: ${data.sessionName}`,
-    ``,
-    `- date: ${date}`,
-    `- branch: ${data.branch}`,
-  ];
-  if (costLine) parts.push(costLine);
-  parts.push(``, `## diff summary`, ``, `\`\`\``, data.diff || "(no changes)", `\`\`\``);
-
-  if (data.gitLog) {
-    parts.push(``, `## git log`, ``, `\`\`\``, data.gitLog, `\`\`\``);
-  }
-
-  if (data.todos && data.todos.length > 0) {
-    parts.push(``, `## todos`, ``);
-    for (const todo of data.todos) {
-      parts.push(`- [ ] ${todo}`);
-    }
-  }
-
-  if (data.claudeMdContent) {
-    parts.push(``, `## CLAUDE.md`, ``, data.claudeMdContent);
-  }
-
-  parts.push(``);
-  return parts.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
+  return buildHandoffMarkdown(data, { fenceDiff: true });
 }
 
 function applyTemplate(template: string, data: HandoffData): string {
   const date = new Date().toISOString().slice(0, 10);
-  const costStr =
-    data.costUSD != null
-      ? data.currency === "JPY"
-        ? `¥${Math.round(data.costUSD * (data.exchangeRate ?? DEFAULT_JPY_EXCHANGE_RATE))}`
-        : `$${data.costUSD.toFixed(3)}`
-      : "N/A";
+  const costStr = data.costUSD != null
+    ? formatCost(data.costUSD, data.currency, data.exchangeRate)
+    : "N/A";
 
   return template
     .replace(/\{\{sessionName\}\}/g, data.sessionName)

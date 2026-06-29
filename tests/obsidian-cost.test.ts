@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildDefaultContent, DEFAULT_JPY_EXCHANGE_RATE } from "../src/integrations/obsidian.js";
+import { DEFAULT_JPY_EXCHANGE_RATE } from "../src/core/cost.js";
+import { buildDefaultContent } from "../src/integrations/obsidian.js";
 
 describe("BUG-04: handoff cost rendering uses the shared JPY default", () => {
   it("renders JPY cost with the 155 default when exchangeRate is omitted", () => {

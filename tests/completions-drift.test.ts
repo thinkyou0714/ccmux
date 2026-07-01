@@ -14,14 +14,14 @@ const read = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 function registeredNames(): string[] {
   const src = read("src/index.ts");
   const names = new Set<string>();
-  for (const m of src.matchAll(/\.command\(\s*["'`]([a-z][a-z0-9-]*)/g)) names.add(m[1]);
-  for (const m of src.matchAll(/\.alias\(\s*["'`]([a-z][a-z0-9-]*)/g)) names.add(m[1]);
+  for (const m of src.matchAll(/\.command\(\s*["'`]([a-z][a-z0-9-]*)/g)) if (m[1]) names.add(m[1]);
+  for (const m of src.matchAll(/\.alias\(\s*["'`]([a-z][a-z0-9-]*)/g)) if (m[1]) names.add(m[1]);
   return [...names];
 }
 
 function wordsFrom(text: string, marker: RegExp): string[] {
   const m = text.match(marker);
-  if (!m) return [];
+  if (!m || m[1] === undefined) return [];
   return m[1].trim().split(/\s+/);
 }
 

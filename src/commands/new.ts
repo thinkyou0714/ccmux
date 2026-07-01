@@ -8,8 +8,8 @@ import { loadConfig } from "../config/schema.js";
 import { resolveClaudeCmd } from "../integrations/autoclaw.js";
 
 export interface NewOptions {
-  project?: string;
-  llm?: "claude" | "autoclaw";
+  project?: string | undefined;
+  llm?: "claude" | "autoclaw" | undefined;
 }
 
 export async function newCommand(name: string, opts: NewOptions): Promise<void> {

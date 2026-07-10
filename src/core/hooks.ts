@@ -227,6 +227,8 @@ async function writeSessionStartHook(
   hooksDir: string,
   worktreePath: string
 ): Promise<void> {
+  const wtPosix = worktreePath.replace(/\\/g, "/");
+
   const script = `#!/usr/bin/env bash
 # ccmux SessionStart hook — re-injects TASK_STATE.md after compaction.
 # Only fires when session source is "compact".
@@ -254,7 +256,7 @@ if [ "$SOURCE" != "compact" ]; then
   exit 0
 fi
 
-TASK_STATE_FILE="${worktreePath}/TASK_STATE.md"
+TASK_STATE_FILE="${wtPosix}/TASK_STATE.md"
 
 if [ ! -f "$TASK_STATE_FILE" ]; then
   exit 0

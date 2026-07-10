@@ -111,3 +111,13 @@ row — see the Default column (e.g. `OBSIDIAN_*` win over config, while
 ## Why ccmux?
 
 Most session managers depend on tmux. ccmux is built for Zellij-first workflows with n8n + Obsidian integration — allowing Claude Code to hand off context between sessions automatically.
+
+## Claude Code で開発する (web / cloud 対応)
+
+このリポジトリは **Claude Code on the web** に対応しています。
+
+- 依存は `.claude/bootstrap.sh`（SessionStart）が `npm ci` で自動インストール（ローカルでは `node_modules` があれば no-op）。
+- クラウドセッションは `AGENTS.md` と `.claude/skills/`（例: `run-tests`）を自動ロード。
+- ccmux の実行系（Zellij/n8n/Obsidian）はローカル専用。クラウドはコードの読み書き・テスト用。
+- MCP は本リポジトリではローカル専用。詳細は
+  [`.github/docs/claude-code-web-readiness.md`](https://github.com/thinkyou0714/.github/blob/main/docs/claude-code-web-readiness.md)。

@@ -196,9 +196,9 @@ export async function writeLocalHandoff(data: {
   sessionName: string;
   branch: string;
   diff: string;
-  claudeMdContent?: string;
-  todos?: string[];
-  gitLog?: string;
+  claudeMdContent?: string | undefined;
+  todos?: string[] | undefined;
+  gitLog?: string | undefined;
 }): Promise<void> {
   const dir = handoffsDir();
   await fs.mkdir(dir, { recursive: true });

@@ -40,9 +40,9 @@ export interface CcmuxConfig {
   autoclaw: {
     url: string;
     /** Model name to pass via --model flag (e.g. "qwen3-coder" for Ollama). Omit to use server default. */
-    model?: string;
+    model?: string | undefined;
     /** Auth token for the local proxy. Use "ollama" when pointing directly at Ollama. */
-    authToken?: string;
+    authToken?: string | undefined;
   };
   cost: {
     enabled: boolean;

@@ -37,5 +37,18 @@
       "Bash(git push --no-verify *)",
       "Bash(git merge --no-verify *)"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/bootstrap.sh\""
+          }
+        ]
+      }
+    ]
   }
 }

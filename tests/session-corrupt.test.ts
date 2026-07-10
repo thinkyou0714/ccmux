@@ -46,7 +46,7 @@ describe("readDB corrupt sessions.json handling", () => {
     const backups = await corruptBackups();
     expect(backups).toHaveLength(1);
     // The backup preserves the original bytes for recovery.
-    expect(await fs.readFile(path.join(tmp, backups[0]), "utf-8")).toBe(corrupt);
+    expect(await fs.readFile(path.join(tmp, backups[0]!), "utf-8")).toBe(corrupt);
   });
 
   it("backs up a structurally invalid DB (missing sessions array)", async () => {
@@ -63,7 +63,7 @@ describe("readDB corrupt sessions.json handling", () => {
 
     const backups = await corruptBackups();
     expect(backups).toHaveLength(1);
-    expect(await fs.readFile(path.join(tmp, backups[0]), "utf-8")).toBe("GARBAGE");
+    expect(await fs.readFile(path.join(tmp, backups[0]!), "utf-8")).toBe("GARBAGE");
     expect((await listSessions()).map((s) => s.name)).toContain("fresh");
   });
 

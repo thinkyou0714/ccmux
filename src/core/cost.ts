@@ -27,7 +27,7 @@ export interface DailyCostSummary {
 let _cache: { data: CcusageJson; fetchedAt: number } | null = null;
 const CACHE_TTL_MS = 60_000;
 
-function resolveClaudeConfigDir(): string | undefined {
+export function resolveClaudeConfigDir(): string | undefined {
   // Explicit override always wins.
   if (process.env.CLAUDE_CONFIG_DIR) return process.env.CLAUDE_CONFIG_DIR;
   // WSL2: Claude Code data lives under the Windows user profile, not the WSL

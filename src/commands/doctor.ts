@@ -8,13 +8,13 @@ import { configFile } from "../core/paths.js";
 interface CheckResult {
   label: string;
   ok: boolean;
-  detail?: string;
-  required?: boolean;
+  detail?: string | undefined;
+  required?: boolean | undefined;
 }
 
 async function checkNodeVersion(): Promise<CheckResult> {
   const ver = process.versions.node;
-  const major = parseInt(ver.split(".")[0], 10);
+  const major = parseInt(ver.split(".")[0] ?? "0", 10);
   return {
     label: `Node.js >= 22 (found ${ver})`,
     ok: major >= 22,

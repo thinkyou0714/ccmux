@@ -6,7 +6,7 @@ interface ObsidianConfig {
   baseUrl: string;
   apiKey: string;
   handoffPath: string;
-  handoffTemplatePath?: string;
+  handoffTemplatePath?: string | undefined;
   /**
    * Opt-in escape hatch for self-signed certs on the local Obsidian Local REST
    * API. Default false: TLS is verified so the Bearer API key cannot leak to a
@@ -20,12 +20,12 @@ export interface HandoffData {
   sessionName: string;
   branch: string;
   diff: string;
-  costUSD?: number;
-  currency?: "JPY" | "USD";
-  exchangeRate?: number;
-  claudeMdContent?: string;
-  todos?: string[];
-  gitLog?: string;
+  costUSD?: number | undefined;
+  currency?: "JPY" | "USD" | undefined;
+  exchangeRate?: number | undefined;
+  claudeMdContent?: string | undefined;
+  todos?: string[] | undefined;
+  gitLog?: string | undefined;
 }
 
 function resolveObsidianConfig(cfg: ObsidianConfig): ObsidianConfig {
@@ -165,24 +165,24 @@ export interface SessionExportRecord {
   id: string;
   name: string;
   status: string;
-  costUSD?: number;
-  branch?: string;
-  project?: string;
-  llmBackend?: string;
-  createdAt?: string;
-  updatedAt?: string;
-  worktreePath?: string;
-  iterations?: number;
-  durationSec?: number;
+  costUSD?: number | undefined;
+  branch?: string | undefined;
+  project?: string | undefined;
+  llmBackend?: string | undefined;
+  createdAt?: string | undefined;
+  updatedAt?: string | undefined;
+  worktreePath?: string | undefined;
+  iterations?: number | undefined;
+  durationSec?: number | undefined;
 }
 
 export interface DashboardExportConfig {
-  baseUrl?: string;
-  apiKey?: string;
+  baseUrl?: string | undefined;
+  apiKey?: string | undefined;
   /** Vault path to the folder receiving per-session markdown files. */
-  dataPath?: string;
+  dataPath?: string | undefined;
   /** Local fallback dir when Obsidian PUT fails. Default ~/.ccmux/dashboard-export. */
-  localFallbackDir?: string;
+  localFallbackDir?: string | undefined;
 }
 
 const DEFAULT_DATA_PATH = "05_OUTPUT/data/ccmux-sessions";

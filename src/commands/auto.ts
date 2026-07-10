@@ -35,9 +35,9 @@ export async function autoCommand(name?: string, opts: AutoOptions = {}): Promis
     try {
       const files = await fs.readdir(handoffs);
       const matches = files.filter((f) => f.endsWith(`-${opts.resume}.md`)).sort();
-      if (matches.length > 0) {
-        const latest = path.join(handoffs, matches[matches.length - 1]);
-        const content = await fs.readFile(latest, "utf-8");
+      const latest = matches.at(-1);
+      if (latest) {
+        const content = await fs.readFile(path.join(handoffs, latest), "utf-8");
         opts.prompt = `前セッション ${opts.resume} の続きです:\n\n${content}`;
       }
     } catch {
@@ -233,7 +233,7 @@ interface LoopDaemonOpts {
   cfg: CcmuxConfig;
   maxIter: number;
   until: string;
-  sandbox?: boolean;
+  sandbox?: boolean | undefined;
 }
 
 async function spawnLoopDaemon(opts: LoopDaemonOpts): Promise<number | undefined> {

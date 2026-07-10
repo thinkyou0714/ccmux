@@ -204,6 +204,14 @@ async function handle(
         return send(res, 401, { error: "Invalid signature" });
       }
 
+      // Trace signature-valid webhooks so redeliveries/failures can be correlated
+      // with GitHub's delivery log (X-GitHub-Delivery is a stable per-delivery UUID).
+      const deliveryHeader = req.headers["x-github-delivery"];
+      const deliveryId = (Array.isArray(deliveryHeader) ? deliveryHeader[0] : deliveryHeader) ?? "unknown";
+      console.error(
+        `[ccmux] webhook delivery=${deliveryId} event=${req.headers["x-github-event"] ?? "-"} action=${(body.action as string | undefined) ?? "-"}`,
+      );
+
       const event = req.headers["x-github-event"];
       if (event !== "issues") {
         return send(res, 200, { ok: false, reason: "not an issues event" });
@@ -329,6 +337,12 @@ export async function startServer(portOverride?: number): Promise<{ port: number
   return {
     port: boundPort,
     https: isHttps,
-    close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
+    close: () => new Promise<void>((resolve, reject) => {
+      // Close idle keep-alive sockets immediately so shutdown doesn't block for
+      // keepAliveTimeout waiting them out; in-flight requests still drain before
+      // server.close()'s callback fires. (Node >=18.2 closeIdleConnections.)
+      server.closeIdleConnections();
+      server.close((err) => (err ? reject(err) : resolve()));
+    }),
   };
 }

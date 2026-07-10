@@ -232,11 +232,25 @@ async function writeSessionStartHook(
   const script = `#!/usr/bin/env bash
 # ccmux SessionStart hook — re-injects TASK_STATE.md after compaction.
 # Only fires when session source is "compact".
+#
+# Extracts "source" with node, not 'grep -oP': PCRE lookbehind is unavailable
+# on macOS/BSD grep and busybox/Alpine, so the old grep silently failed to
+# detect compaction there. node is guaranteed on PATH wherever Claude Code
+# hooks run (Claude Code is itself a node process).
 
-set -euo pipefail
+set -uo pipefail
 
-INPUT=$(cat)
-SOURCE=$(echo "$INPUT" | grep -oP '(?<="source":")[^"]+' || echo "")
+TMP_INPUT=$(mktemp 2>/dev/null || echo "/tmp/ccmux-sessionstart-$$")
+trap 'rm -f "$TMP_INPUT"' EXIT
+cat > "$TMP_INPUT"
+
+SOURCE=$(node -e '
+  const fs = require("fs");
+  let d;
+  try { d = JSON.parse(fs.readFileSync(process.argv[1], "utf-8")); }
+  catch { process.exit(0); }
+  if (d && typeof d.source === "string") process.stdout.write(d.source);
+' "$TMP_INPUT" 2>/dev/null || true)
 
 if [ "$SOURCE" != "compact" ]; then
   exit 0
@@ -292,15 +306,15 @@ async function writePreToolUseHook(
   const script = `#!/usr/bin/env bash
 # ccmux PreToolUse hook — write-boundary + Bash destructive-command blocklist (BL-2).
 #
-# Uses python3 for JSON parsing for portability — grep -P is unreliable on
-# busybox/MSYS/non-UTF-8 locales. python3 ships with every host that runs
-# Claude Code hooks.
+# Uses node for JSON parsing for portability — grep -P is unreliable on
+# busybox/MSYS/non-UTF-8 locales. node is guaranteed on PATH wherever Claude
+# Code hooks run (Claude Code is itself a node process).
 
 set -uo pipefail
 
 WORKTREE="${wtPosix}"
 
-# Read stdin once into a temp file so we can pipe it to python repeatedly.
+# Read stdin once into a temp file so we can pass it to node repeatedly.
 TMP_INPUT=$(mktemp 2>/dev/null || echo "/tmp/ccmux-hook-$$")
 trap 'rm -f "$TMP_INPUT"' EXIT
 cat > "$TMP_INPUT"

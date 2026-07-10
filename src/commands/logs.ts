@@ -53,7 +53,7 @@ async function listAllLogs(): Promise<void> {
   console.log();
 }
 
-async function cleanLogs(opts: { olderThan?: number; dryRun?: boolean }): Promise<void> {
+async function cleanLogs(opts: { olderThan?: number | undefined; dryRun?: boolean | undefined }): Promise<void> {
   const cfg = await loadConfig();
   const maxAgeDays = opts.olderThan ?? cfg.logs.maxAgeDays;
   const logDir = logsDir();

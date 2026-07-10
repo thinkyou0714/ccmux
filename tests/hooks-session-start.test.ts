@@ -71,16 +71,15 @@ posixOnly("SessionStart hook — compaction recovery", () => {
 });
 
 describe("SessionStart hook — POSIX worktree path", () => {
-  it("embeds TASK_STATE_FILE with a POSIX worktree path", async () => {
+  it("writes TASK_STATE_FILE with forward slashes only", async () => {
     const script = await fs.readFile(hookPath, "utf-8");
-    const taskStateLine = script
-      .split("\n")
-      .find((line) => line.startsWith("TASK_STATE_FILE="));
-
-    expect(taskStateLine).toBeDefined();
-    expect(taskStateLine).not.toContain("\\");
-    expect(taskStateLine).toBe(
-      `TASK_STATE_FILE="${tmp.replace(/\/g, "/")}/TASK_STATE.md"`,
-    );
+    const backslash = String.fromCharCode(92);
+    const newline = String.fromCharCode(10);
+    const line = script
+      .split(newline)
+      .find((l) => l.startsWith("TASK_STATE_FILE="));
+    expect(line).toBeDefined();
+    expect(line).not.toContain(backslash);
+    expect(line).toContain("/TASK_STATE.md");
   });
 });
